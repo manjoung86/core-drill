@@ -848,6 +848,24 @@
     } else if (pausedByHide && settings.auto) resume();
   });
 
+  // ── 화면 켜짐 유지: 게임이 진행 중일 때만 화면이 어두워지거나 잠기지 않게 한다 ──
+  let wakeLock = null, wakePending = false, wakeRetryAt = 0;
+  function syncWakeLock(now){
+    const want = !document.hidden && (state === "play" || state === "ready" || state === "clear" || (state === "over" && settings.auto));
+    if (want && !wakeLock && !wakePending && now >= wakeRetryAt && navigator.wakeLock){
+      wakePending = true;
+      navigator.wakeLock.request("screen").then(lock => {
+        wakeLock = lock;
+        lock.addEventListener("release", () => { if (wakeLock === lock) wakeLock = null; });
+      }).catch(() => { wakeRetryAt = performance.now() + 3000; })
+        .finally(() => { wakePending = false; });
+    }
+    else if (!want && wakeLock){
+      const lock = wakeLock; wakeLock = null;
+      lock.release().catch(() => {});
+    }
+  }
+
   // ── 루프 ────────────────────────────────────────────────
   let last = performance.now();
   function frame(now){
@@ -856,6 +874,7 @@
     if (state !== "pause" && state !== "menu") update(dt);
     draw();
     syncHud();
+    syncWakeLock(now);
     requestAnimationFrame(frame);
   }
 
