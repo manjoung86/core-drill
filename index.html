@@ -62,16 +62,20 @@
   .lives i.out{background:#3a3a3a;}
   .badge{display:none;font-size:10px;font-weight:600;letter-spacing:.12em;padding:3px 6px;border:1px solid #2f7d2f;color:#8fe08f;border-radius:4px;}
   .badge.on{display:inline-block;}
+  /* 벙커버스터 발사 버튼: 오른손 엄지로 패들을 끄는 동안 왼손 엄지로 쏘도록 왼쪽 아래 */
   .missile-btn{
-    pointer-events:auto;appearance:none;
-    height:40px;padding:0 12px;border-radius:10px;
-    border:0;background:#ffc400;color:#1b1b1b;
-    font:inherit;font-size:14px;font-weight:800;
-    display:flex;align-items:center;gap:4px;
+    position:absolute;left:14px;bottom:calc(env(safe-area-inset-bottom) + 92px);
+    appearance:none;
+    width:60px;height:60px;border-radius:50%;
+    border:3px solid #1b1b1b;background:#ffc400;color:#1b1b1b;
+    font:inherit;font-size:20px;font-weight:900;line-height:1;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;
+    box-shadow:0 4px 14px rgba(0,0,0,.5);
     animation:armed 1s ease-in-out infinite;
   }
+  .missile-btn span{font-size:12px;}
   .missile-btn[hidden]{display:none;}
-  @keyframes armed{ 50%{ box-shadow:0 0 0 5px rgba(255,196,0,.35); } }
+  @keyframes armed{ 50%{ box-shadow:0 4px 14px rgba(0,0,0,.5), 0 0 0 7px rgba(255,196,0,.35); } }
   @media (prefers-reduced-motion: reduce){ .missile-btn{ animation:none; } }
   .icon-btn{
     pointer-events:auto;appearance:none;
@@ -132,11 +136,12 @@
     </div>
     <div class="right">
       <span class="badge" id="autoBadge">AUTO</span>
-      <button class="missile-btn" id="missileBtn" type="button" aria-label="벙커버스터 발사" hidden>▼ <span id="missileCount">1</span></button>
       <span class="lives" id="lives"></span>
       <button class="icon-btn" id="pauseBtn" type="button" aria-label="일시정지">II</button>
     </div>
   </div>
+
+  <button class="missile-btn" id="missileBtn" type="button" aria-label="벙커버스터 발사" hidden>▼<span>×<b id="missileCount">1</b></span></button>
 
   <div class="panel show" id="panel">
     <div class="card">
