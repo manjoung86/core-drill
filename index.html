@@ -229,6 +229,8 @@
   if (!DIFF[settings.diff]) settings.diff = "normal";
   const saveSettings = () => store.set("coredrill.settings", settings);
   const bestOf = d => store.get("coredrill.best." + d, 0) || 0;
+  // 난이도별로 도달한 레벨(클리어한 레벨 + 1). 다시 켜면 여기서부터 이어 한다
+  const reachedOf = d => Math.max(1, store.get("coredrill.level." + d, 1) || 1);
 
   // ── 사운드 ──────────────────────────────────────────────
   let actx = null, lastBlip = 0;
@@ -658,9 +660,10 @@
     if (strike){ missiles = Math.min(MISSILE_MAX, missiles + 1); strike = null; }   // 쏘던 미사일은 돌려준다
     state = "ready"; timer = 0; idleT = 0;
   }
-  function newGame(){
+  // startLevel을 주지 않으면 저장된 진행 레벨부터 시작한다
+  function newGame(startLevel){
     game.diff = settings.diff; D = DIFF[game.diff];
-    score = 0; level = 1; lives = D.lives; assisted = settings.auto;
+    score = 0; level = startLevel || reachedOf(game.diff); lives = D.lives; assisted = settings.auto;
     missiles = 0; strike = null; fwQueue = []; pops = [];
     paddle.w = baseW(); paddle.x = paddle.target = W / 2;
     buildLevel(level); resetBall(); announceLevel();
@@ -1071,7 +1074,11 @@
             t: 0, life: 1 + Math.random() * .8, c: CONFETTI[(Math.random() * CONFETTI.length) | 0], s: 3 });
         }
       }
-      if ((timer += dt) > 2.4){ level++; buildLevel(level); resetBall(); announceLevel(); }
+      if ((timer += dt) > 2.4){
+        level++;
+        store.set("coredrill.level." + game.diff, Math.max(reachedOf(game.diff), level));   // 클리어한 레벨은 인정한다
+        buildLevel(level); resetBall(); announceLevel();
+      }
       return;
     }
     if (state === "over"){
@@ -1404,13 +1411,22 @@
     $("hapticSw2").setAttribute("aria-checked", String(settings.haptic));
     $("diffNote").textContent = panelMode === "pause" && settings.diff !== game.diff ? "새 게임부터 적용" : "";
     $("bestLine").textContent = "최고 기록 (" + DIFF[settings.diff].name + ") " + bestOf(settings.diff).toLocaleString();
+    // 버튼: 저장된 진행이 있으면 그 레벨부터 이어하기, 아래에 1레벨부터
+    const lv = reachedOf(settings.diff), primary = $("primaryBtn"), secondary = $("secondaryBtn");
+    if (panelMode === "pause"){
+      primary.textContent = "계속";
+      secondary.textContent = "LV " + lv + "부터 새로"; secondary.hidden = false;
+    } else {
+      primary.textContent = lv > 1 ? "LV " + lv + "부터 이어하기" : panelMode === "menu" ? "시작" : "다시 하기";
+      secondary.textContent = "1레벨부터"; secondary.hidden = lv <= 1;
+    }
   }
   function showPanel(mode, isBest){
     panelMode = mode;
-    const sub = $("panelSub"), primary = $("primaryBtn"), secondary = $("secondaryBtn");
-    if (mode === "menu"){ sub.textContent = "공으로 초록 벽돌밭을 갉아먹어요"; primary.textContent = "시작"; secondary.hidden = true; }
-    else if (mode === "pause"){ sub.textContent = "일시정지"; primary.textContent = "계속"; secondary.hidden = false; }
-    else { sub.textContent = (isBest ? "최고 기록! " : "게임 오버 · ") + score.toLocaleString() + "점"; primary.textContent = "다시 하기"; secondary.hidden = true; }
+    const sub = $("panelSub");
+    if (mode === "menu") sub.textContent = "공으로 초록 벽돌밭을 갉아먹어요";
+    else if (mode === "pause") sub.textContent = "일시정지";
+    else sub.textContent = (isBest ? "최고 기록! " : "게임 오버 · ") + score.toLocaleString() + "점";
     renderPanel();
     $("panel").classList.add("show");
   }
@@ -1452,9 +1468,9 @@
   });
   $("primaryBtn").addEventListener("click", () => {
     audio();
-    if (panelMode === "pause") resume(); else newGame();
+    if (panelMode === "pause") resume(); else newGame();          // 저장된 레벨부터
   });
-  $("secondaryBtn").addEventListener("click", () => { audio(); newGame(); });
+  $("secondaryBtn").addEventListener("click", () => { audio(); panelMode === "pause" ? newGame() : newGame(1); });
   $("pauseBtn").addEventListener("click", () => { audio(); pause(); });
   $("missileBtn").addEventListener("click", () => { audio(); fireMissile(); });
   $("hapticSw2").addEventListener("click", () => {
