@@ -181,7 +181,8 @@
   "use strict";
 
   // ── 상수 ────────────────────────────────────────────────
-  const W = 360, CELL = 12, COLS = W / CELL;
+  const W = 360;
+  let CELL = 12, COLS = W / CELL;             // 칸 크기는 레벨 단계마다 바뀐다 (buildLevel)
   const EMPTY = 0, GREEN = 1, WALL = 2;
   const BALL_R = 3.6, MAX_BALLS = 300, PADDLE_H = 9;
   const ITEM_R = 10, ITEM_SPEED = 120;
@@ -278,7 +279,7 @@
     PADDLE_Y = H - safeBot - 58;
     paintField();
   }
-  const rowsFor = () => clamp(Math.floor((PADDLE_Y - 200 - TOP) / CELL), 22, 46);
+  const rowsFor = () => Math.floor(clamp(PADDLE_Y - 200 - TOP, 22 * 12, 46 * 12) / CELL);
 
   // ── 상태 ────────────────────────────────────────────────
   let balls = [], drops = [], parts = [], shots = [];
@@ -290,10 +291,13 @@
   let sizeMul = 1, sizeT = 0, pierceT = 0, laserT = 0, shotT = 0, shake = 0;
   let timer = 0;                    // ready·clear·over 상태에서 쓰는 시간
   let idleT = 0;                    // 마지막으로 벽돌을 깬 뒤 지난 시간
+  // 러시: 한 스테이지가 2분을 넘기면 강한 무기를 쏟아부어 빨리 끝낸다
+  const RUSH_AT = 120, FINAL_AT = 150;
+  let levelT = 0, rush = 0, rushT = 0;
   // 연출: 튀어나오는 글자, 퍼지는 링, 깨진 칸 번쩍임, 클리어 연쇄 폭발
   let pops = [], rings = [], flashes = [], sweep = [], sweepRate = 0, redFlash = 0, boomFlash = 0;
   // 벙커버스터: 모아 뒀다가 버튼으로 쏘는 미사일
-  const MISSILE_MAX = 3, BLAST_R = 6.5;   // 주 폭발 반경(칸)
+  const MISSILE_MAX = 3, BLAST_PX = 78, SEC_PX = 31;   // 주 폭발·2차 폭발 반경(px), 해상도가 바뀌어도 위력이 같다
   let missiles = 0, strike = null;
   let combo = 0, comboT = 0, comboIdx = 0, milestone = 0;
   const COMBO_STEPS = [10, 25, 50, 100, 200, 300, 500, 1000];
@@ -301,29 +305,47 @@
   const CONFETTI = ["#ff5a5f", "#ffd23f", "#3ec1d3", "#9b5de5", "#6cc02f", "#ff8c42"];
   let keyL = false, keyR = false;
 
-  // ── 레벨 생성: 벽으로 둘러싼 통로와 방을 판다 ───────────
-  function buildLevel(lv){
-    ROWS = rowsFor();
-    const N = COLS * ROWS;
-    grid = new Uint8Array(N).fill(GREEN);
-    const rnd = mulberry32(lv * 2654435761 + 7);
-    const ri = (a, b) => a + Math.floor(rnd() * (b - a + 1));
-    const carve = new Uint8Array(N);
-    const mark = (x, y) => { if (x >= 1 && x < COLS - 1 && y >= 1 && y < ROWS) carve[y * COLS + x] = 1; };
-    const block = (x, y) => { mark(x, y); mark(x + 1, y); mark(x, y + 1); mark(x + 1, y + 1); };
+  // ── 레벨 단계: 레벨이 오를수록 칸이 작아지고(해상도 상승) 보상이 커진다 ──
+  const TIERS = [
+    { from: 1,  cell: 12, title: "CLEAR!" },
+    { from: 3,  cell: 10, title: "GREAT!" },
+    { from: 5,  cell: 9,  title: "EXCELLENT!" },
+    { from: 7,  cell: 8,  title: "AMAZING!" },
+    { from: 10, cell: 6,  title: "LEGENDARY!" }
+  ];
+  const tierOf = lv => { let t = 0; TIERS.forEach((s, i) => { if (lv >= s.from) t = i; }); return t; };
+  let tier = 0;
+  const scoreMul = () => 1 + tier * 0.5;          // 점수 배율 ×1.0 ~ ×3.0
 
-    // 통로: 바닥에서 시작해 꺾이며 올라가는 폭 2칸 길
+  // ── 맵 종류: 1~5레벨은 차례로, 그 뒤는 무작위(같은 맵 연속 없음) ──
+  const MAPS = ["corridors", "full", "slits", "pyramid", "maze", "rings"];
+  const MAP_NAME = { corridors: "TUNNELS", full: "FULL FIELD", slits: "SLITS", pyramid: "PYRAMID", maze: "MAZE", rings: "TARGET" };
+  function mapFor(lv){
+    if (lv <= MAPS.length) return MAPS[lv - 1];
+    let k = Math.floor(mulberry32(lv * 977 + 3)() * MAPS.length);
+    if (MAPS[k] === mapFor(lv - 1)) k = (k + 1) % MAPS.length;
+    return MAPS[k];
+  }
+  let mapKind = "corridors";
+
+  // 통로·방 맵: 12px 단위 거친 격자에서 만든 뒤 지금 해상도로 옮긴다
+  function genCorridors(cols, rows, rnd, lv){
+    const ri = (a, b) => a + Math.floor(rnd() * (b - a + 1));
+    const N = cols * rows, g = new Uint8Array(N).fill(GREEN), carve = new Uint8Array(N);
+    const mark = (x, y) => { if (x >= 1 && x < cols - 1 && y >= 1 && y < rows) carve[y * cols + x] = 1; };
+    const block = (x, y) => { mark(x, y); mark(x + 1, y); mark(x, y + 1); mark(x + 1, y + 1); };
     const D4 = [[0,-1],[1,0],[0,1],[-1,0]];
+    // 통로: 바닥에서 시작해 꺾이며 올라가는 폭 2칸 길
     const corridors = 1 + Math.min(2, Math.ceil(lv / 2));
     for (let c = 0; c < corridors; c++){
-      let x = ri(3, COLS - 5), y = ROWS - 2, dir = 0;
+      let x = ri(3, cols - 5), y = rows - 2, dir = 0;
       const segs = ri(3, 6);
       for (let s = 0; s < segs; s++){
         const len = dir === 0 ? ri(5, 11) : ri(4, 10);
         for (let i = 0; i < len; i++){
           block(x, y);
           const nx = x + D4[dir][0], ny = y + D4[dir][1];
-          if (nx < 2 || nx > COLS - 4 || ny < 3) break;
+          if (nx < 2 || nx > cols - 4 || ny < 3) break;
           x = nx; y = ny;
         }
         dir = dir === 0 ? (rnd() < 0.5 ? 1 : 3) : 0;
@@ -333,29 +355,134 @@
     const rooms = ri(1, 2) + (lv > 3 ? 1 : 0);
     for (let r = 0; r < rooms; r++){
       const w = ri(6, 12), h = ri(4, 7);
-      const x0 = ri(3, COLS - 4 - w), y0 = ri(3, ROWS - 10 - h);
+      const x0 = ri(3, cols - 4 - w), y0 = ri(3, Math.max(3, rows - 10 - h));
       for (let y = y0; y < y0 + h; y++) for (let x = x0; x < x0 + w; x++) mark(x, y);
     }
-
     // 판 곳 둘레를 벽으로
     for (let i = 0; i < N; i++){
       if (carve[i]) continue;
-      const x = i % COLS, y = (i / COLS) | 0;
+      const x = i % cols, y = (i / cols) | 0;
       search: for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++){
         const xx = x + dx, yy = y + dy;
-        if (xx < 0 || xx >= COLS || yy < 0 || yy >= ROWS) continue;
-        if (carve[yy * COLS + xx]){ grid[i] = WALL; break search; }
+        if (xx < 0 || xx >= cols || yy < 0 || yy >= rows) continue;
+        if (carve[yy * cols + xx]){ g[i] = WALL; break search; }
       }
     }
-    for (let i = 0; i < N; i++) if (carve[i]) grid[i] = EMPTY;
-
+    for (let i = 0; i < N; i++) if (carve[i]) g[i] = EMPTY;
     // 벽 틈: 벽을 점선처럼 2칸씩 끊어 벽 뒤 초록 칸이 갇히지 않게 한다
     for (let i = 0; i < N; i++){
-      if (grid[i] !== WALL || rnd() >= 0.18) continue;
-      const x = i % COLS;
-      grid[i] = GREEN;
-      if (x + 1 < COLS && grid[i + 1] === WALL) grid[i + 1] = GREEN;
-      else if (i + COLS < N && grid[i + COLS] === WALL) grid[i + COLS] = GREEN;
+      if (g[i] !== WALL || rnd() >= 0.18) continue;
+      g[i] = GREEN;
+      if (i % cols + 1 < cols && g[i + 1] === WALL) g[i + 1] = GREEN;
+      else if (i + cols < N && g[i + cols] === WALL) g[i + cols] = GREEN;
+    }
+    return g;
+  }
+
+  // 미로: 36px 칸의 미로를 만들고, 막다른 길이 너무 많지 않게 벽 일부를 튼다
+  function genMaze(rnd, FH){
+    const M = 36, mw = Math.floor(W / M), mh = Math.max(4, Math.floor(FH / M));
+    const vW = [], hW = [];                        // vW[y][x]: 칸 왼쪽 벽, hW[y][x]: 칸 위쪽 벽
+    for (let y = 0; y <= mh; y++){ vW.push(new Array(mw + 1).fill(1)); hW.push(new Array(mw).fill(1)); }
+    const seen = Array.from({ length: mh }, () => new Array(mw).fill(false));
+    const stack = [[Math.floor(rnd() * mw), mh - 1]];
+    seen[mh - 1][stack[0][0]] = true;
+    while (stack.length){
+      const [x, y] = stack[stack.length - 1];
+      const opts = [[0,-1],[1,0],[0,1],[-1,0]].filter(([dx, dy]) => {
+        const nx = x + dx, ny = y + dy;
+        return nx >= 0 && nx < mw && ny >= 0 && ny < mh && !seen[ny][nx];
+      });
+      if (!opts.length){ stack.pop(); continue; }
+      const [dx, dy] = opts[Math.floor(rnd() * opts.length)];
+      if (dx === 1) vW[y][x + 1] = 0; else if (dx === -1) vW[y][x] = 0;
+      else if (dy === 1) hW[y + 1][x] = 0; else hW[y][x] = 0;
+      seen[y + dy][x + dx] = true;
+      stack.push([x + dx, y + dy]);
+    }
+    for (let y = 1; y < mh; y++) for (let x = 0; x < mw; x++) if (rnd() < 0.3) hW[y][x] = 0;
+    for (let y = 0; y < mh; y++) for (let x = 1; x < mw; x++) if (rnd() < 0.3) vW[y][x] = 0;
+    for (let x = 0; x < mw; x++) hW[mh][x] = rnd() < 0.45 ? 0 : 1;    // 바닥 입구 여러 곳
+    const T = Math.max(CELL, 5);
+    return (px, py) => {
+      const mx = Math.floor(px / M), my = Math.floor(py / M);
+      if (my >= mh) return py - mh * M < T && hW[mh][Math.min(mx, mw - 1)] ? WALL : GREEN;
+      const lx = px - mx * M, ly = py - my * M;
+      if (lx < T && ly < T) return WALL;
+      if (lx < T && vW[my][Math.min(mx, mw)]) return WALL;
+      if (ly < T && hW[my][Math.min(mx, mw - 1)]) return WALL;
+      return GREEN;
+    };
+  }
+
+  // 좁은 틈: 두꺼운 회색 띠가 가로막고, 띠마다 길고 좁은 세로 틈(초록으로 찬 굴)이 몇 개 있다
+  function genSlits(rnd, FH){
+    const bands = FH > 380 ? 3 : 2, T = 54;
+    const w = Math.max(1, Math.round(10 / CELL));          // 틈 폭은 약 10~12px (칸 수)
+    const list = [];
+    for (let b = 0; b < bands; b++){
+      const y0 = Math.round(FH * (b + 1) / (bands + 1) - T / 2);
+      const cols = [], n = 2 + Math.floor(rnd() * 2);
+      for (let k = 0; k < n; k++) cols.push(Math.floor((24 + rnd() * (W - 48)) / CELL));
+      list.push({ y0, cols });
+    }
+    return (px, py) => {
+      const cx = Math.floor(px / CELL);
+      for (const b of list){
+        if (py < b.y0 || py >= b.y0 + T) continue;
+        return b.cols.some(c => cx >= c && cx < c + w) ? GREEN : WALL;
+      }
+      return GREEN;
+    };
+  }
+
+  // 피라미드: 바닥이 넓은 계단식, 층 사이에는 점선 회색 띠
+  function pyramidAt(px, py, FH){
+    const S = 24, layers = Math.max(4, Math.floor(FH * 0.95 / S));
+    const k = Math.floor((FH - py) / S);
+    if (k >= layers) return EMPTY;
+    const half = (W / 2 - 12) * (1 - k / layers);
+    if (Math.abs(px - W / 2) > half) return EMPTY;
+    const top = FH - (k + 1) * S;
+    if (k > 0 && py - top < Math.max(CELL, 5) && (Math.floor(px / 24) + k) % 3 !== 0) return WALL;
+    return GREEN;
+  }
+
+  // 과녁: 이어진 동심원 회색 고리마다 출입구가 몇 군데 뚫려 있다
+  function ringsAt(px, py, FH){
+    const cx = W / 2, cy = FH * 0.45, B = 36, T = Math.max(CELL * 1.5, 8);
+    const dx = px - cx, dy = py - cy, r = Math.hypot(dx, dy), k = Math.floor(r / B);
+    if (k >= 1 && r - k * B < T){
+      const a = (Math.atan2(dy, dx) + Math.PI) / (Math.PI * 2);
+      const doors = 2 + k;                                  // 바깥 고리일수록 출입구가 많다
+      if ((a * doors + k * 0.37) % 1 > 0.1) return WALL;
+    }
+    return GREEN;
+  }
+
+  function buildLevel(lv){
+    tier = tierOf(lv);
+    CELL = TIERS[tier].cell; COLS = W / CELL;
+    ROWS = rowsFor();
+    const N = COLS * ROWS, FH = ROWS * CELL;
+    grid = new Uint8Array(N);
+    const rnd = mulberry32(lv * 2654435761 + 7);
+    mapKind = mapFor(lv);
+
+    if (mapKind === "corridors"){
+      const cr = Math.ceil(FH / 12), g = genCorridors(30, cr, rnd, lv);
+      for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++){
+        grid[y * COLS + x] = g[Math.min(cr - 1, Math.floor((y + 0.5) * CELL / 12)) * 30 + Math.floor((x + 0.5) * CELL / 12)];
+      }
+    } else {
+      const at = mapKind === "maze" ? genMaze(rnd, FH)
+        : mapKind === "slits" ? genSlits(rnd, FH)
+        : mapKind === "pyramid" ? (px, py) => pyramidAt(px, py, FH)
+        : mapKind === "rings" ? (px, py) => ringsAt(px, py, FH)
+        : () => GREEN;
+      for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++){
+        grid[y * COLS + x] = at((x + 0.5) * CELL, (y + 0.5) * CELL);
+      }
     }
 
     // 테두리: 왼쪽·오른쪽·위 (아래는 열려 있다)
@@ -363,6 +490,7 @@
     for (let x = 0; x < COLS; x++) grid[x] = WALL;
 
     // 바닥에서 닿지 않는 초록 칸은 비운다
+    const D4 = [[0,-1],[1,0],[0,1],[-1,0]];
     const seen = new Uint8Array(N), queue = [];
     for (let x = 0; x < COLS; x++){
       const i = (ROWS - 1) * COLS + x;
@@ -383,6 +511,7 @@
       if (grid[i] === GREEN) totalGreen++;
     }
     broken = 0; milestone = 0;
+    levelT = 0; rush = 0; rushT = 0;
     paintField();
   }
 
@@ -451,13 +580,36 @@
     for (let j = 0; j < n; j++) setTimeout(() => hapticLabel && hapticLabel.click(), j * 90);
   }
   function announceLevel(){
-    pop("LEVEL " + level, W / 2, fieldMidY() - 14, 30, "#ffffff", 1.6);
-    if (level > 1) pop("SPEED +" + Math.round(speedUp() * 100) + "%", W / 2, fieldMidY() + 22, 16, "#ffd23f", 1.6);
+    pop("LEVEL " + level, W / 2, fieldMidY() - 30, 30, "#ffffff", 1.8);
+    pop(MAP_NAME[mapKind], W / 2, fieldMidY() + 4, 18, "#6cc02f", 1.8);
+    if (level > 1) pop("SPEED +" + Math.round(speedUp() * 100) + "%  ·  SCORE ×" + scoreMul().toFixed(1), W / 2, fieldMidY() + 32, 13, "#ffd23f", 1.8);
+    // 해상도가 올라가는 레벨: 목숨 +1, 벙커버스터 +1
+    if (level > 1 && tierOf(level - 1) < tier){
+      lives = Math.min(D.lives + 2, lives + 1);
+      missiles = Math.min(MISSILE_MAX, missiles + 1);
+      pop("RESOLUTION UP!", W / 2, fieldMidY() - 64, 22, "#ff4fa3", 2.2);
+      pop("+1 LIFE  ·  +1 ▼", W / 2, fieldMidY() + 58, 14, "#ffffff", 2.2);
+      fireworks(4 + tier * 2); haptic(2);
+    }
+    // 3단계부터는 레벨 시작 선물로 +3 공이 떨어진다
+    if (tier >= 2) drops.push({ x: W / 2, y: TOP + ROWS * CELL + ITEM_R, kind: "plus3" });
+  }
+  // 공이 초록 칸을 깨면: 칸이 8px 이하일 땐 십자 모양으로 같이 깬다 (깨지는 면적 유지)
+  function crack(i){
+    breakCell(i);
+    if (CELL > 8) return;
+    const x = i % COLS;
+    for (const j of [i - 1, i + 1, i - COLS, i + COLS]){
+      if (j < 0 || j >= grid.length || grid[j] !== GREEN) continue;
+      if ((j === i - 1 && x === 0) || (j === i + 1 && x === COLS - 1)) continue;
+      breakCell(j);
+    }
   }
 
   // ── 게임 흐름 ───────────────────────────────────────────
   const baseW = () => D.paddle;
-  const speedUp = () => Math.min(level - 1, 9) * 0.05;   // 레벨마다 5%, 10레벨에 45%로 최대
+  const speedUp = () => Math.min((level - 1) * 0.03, 0.45);   // 레벨마다 3%씩 조금씩, 16레벨에 45%로 최대
+  const clearBonus = () => Math.round((1000 + level * 200) * scoreMul());
   const ballSpeed = () => D.speed * (1 + speedUp());
 
   function resetBall(){
@@ -501,14 +653,14 @@
     for (let i = 0; i < grid.length; i++) if (grid[i] === GREEN) sweep.push(i);
     sweep.sort((a, b) => a - b);               // pop()이 가장 아래 칸부터 꺼낸다
     sweepRate = sweep.length / 0.9;
-    score += 1000 + level * 200;
+    score += clearBonus();
     drops = []; shots = [];
     state = "clear"; timer = 0; shake = 10;
-    pop("LEVEL CLEAR!", W / 2, fieldMidY() - 12, 32, "#ffd23f", 2.2);
-    pop("+" + (1000 + level * 200).toLocaleString(), W / 2, fieldMidY() + 26, 18, "#ffffff", 2.2);
+    pop(TIERS[tier].title, W / 2, fieldMidY() - 12, 30 + tier * 3, ["#ffd23f", "#3ec1d3", "#9b5de5", "#ff8c42", "#ff4fa3"][tier], 2.2);
+    pop("+" + clearBonus().toLocaleString(), W / 2, fieldMidY() + 26, 18, "#ffffff", 2.2);
     ring(W / 2, fieldMidY(), "#ffd23f", 220);
     fanfare([523, 659, 784, 1047, 1319], 90);
-    fireworks(8);
+    fireworks(8 + tier * 4);              // 단계가 높을수록 더 많이
     haptic(3);
     if (strike){ missiles = Math.min(MISSILE_MAX, missiles + 1); strike = null; }
   }
@@ -525,7 +677,7 @@
   }
   function breakCell(i){
     grid[i] = EMPTY; paintCell(i);
-    broken++; score += 10; idleT = 0;
+    broken++; score += Math.round(10 * scoreMul()); idleT = 0;
     if (parts.length < 500) burst(i, 3);
     // 콤보: 0.6초 안에 이어서 깨면 쌓이고, 단계마다 크게 알린다
     combo = comboT > 0 ? combo + 1 : 1; comboT = 0.6;
@@ -542,7 +694,7 @@
     if (milestone < 1 && prog >= 0.5){ milestone = 1; pop("HALF WAY!", W / 2, fieldMidY() + 40, 22, "#3ec1d3", 1.3); }
     if (milestone < 2 && prog >= 0.75){ milestone = 2; pop("75%!", W / 2, fieldMidY() + 40, 26, "#3ec1d3", 1.3); }
     brickBlip();
-    if (Math.random() < D.drop && drops.length < 8){
+    if (Math.random() < D.drop * CELL * CELL / 144 && drops.length < 8){   // 면적당 확률은 해상도와 무관
       const r = Math.random();
       const kind = Math.random() < D.bad ? "shrink" : pickGood(r);
       drops.push({ x: (i % COLS) * CELL + CELL / 2, y: ((i / COLS) | 0) * CELL + TOP + CELL / 2, kind });
@@ -553,11 +705,17 @@
     return r < 0.50 ? "plus3" : r < 0.63 ? "wide" : r < 0.77 ? "laser" : r < 0.87 ? "pierce" : r < 0.95 ? "mega" : "missile";
   }
   function applyItem(kind){
+    const before = balls.length;
     if (kind === "plus3"){
-      const s = ballSpeed();
-      for (let j = -1; j <= 1 && balls.length < MAX_BALLS; j++){
-        const a = -Math.PI / 2 + j * 0.38;
-        balls.push({ x: paddle.x, y: PADDLE_Y - BALL_R - 2, vx: Math.cos(a) * s, vy: Math.sin(a) * s, stuck:false });
+      // 날아가는 공마다 그 자리에서 3개로 갈라져 부채꼴로 퍼진다 (왕볼에서는 보통 공이 갈라져 나온다)
+      for (const b of balls.slice()){
+        if (b.stuck) continue;
+        const sp = Math.hypot(b.vx, b.vy), a0 = Math.atan2(b.vy, b.vx);
+        for (const da of [-0.4, 0.4]){
+          if (balls.length >= MAX_BALLS) break;
+          balls.push({ x: b.x, y: b.y, vx: Math.cos(a0 + da) * sp, vy: Math.sin(a0 + da) * sp, stuck:false });
+        }
+        ring(b.x, b.y, ITEMS.plus3.color, 26);
       }
     }
     else if (kind === "wide"){ sizeMul = 1.5; sizeT = 12; }
@@ -570,11 +728,11 @@
       balls.push({ x: paddle.x, y: PADDLE_Y - MEGA_R - 2, vx: Math.cos(a) * s, vy: Math.sin(a) * s, stuck:false, mega: MEGA_TIME, r: MEGA_R });
       shake = Math.max(shake, 6); haptic(1);
     }
-    const label = { plus3:"+3 BALLS", laser:"LASER!", missile:"BUNKER BUSTER +1", mega:"MEGA BALL!", wide:"WIDE!", pierce:"PIERCE!", shrink:"SHRINK..." }[kind];
+    const label = { plus3:"SPLIT!", laser:"LASER!", missile:"BUNKER BUSTER +1", mega:"MEGA BALL!", wide:"WIDE!", pierce:"PIERCE!", shrink:"SHRINK..." }[kind];
     pop(label, paddle.x, PADDLE_Y - 34, 16, ITEMS[kind].color, 0.9);
     ring(paddle.x, PADDLE_Y, ITEMS[kind].color, 70);
     for (const n of BALL_STEPS){
-      if (kind === "plus3" && balls.length >= n && balls.length - 3 < n){
+      if (kind === "plus3" && before < n && balls.length >= n){
         pop("×" + n + " BALLS!", W / 2, fieldMidY(), 30, "#1fb6d9", 1.3);
         shake = Math.max(shake, 6);
         fireworks(2); haptic(1);
@@ -599,7 +757,8 @@
     if (parts.length < 900) burst(i, 3, 300, colors || ["#bdbdbd", "#8d8d8d", "#ffffff"]);
     return true;
   }
-  function blast(x, y, r, big){
+  function blast(x, y, rPx, big){
+    const r = rPx / CELL;
     const cx = Math.floor(x / CELL), cy = Math.floor((y - TOP) / CELL), R = Math.ceil(r);
     for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++){
       const xx = cx + dx, yy = cy + dy;
@@ -612,10 +771,10 @@
       parts.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, t: 0, life: .5 + Math.random() * .5,
         c: ["#ffffff", "#ffd23f", "#ff8c42", "#ff1744"][j % 4], s: 3 });
     }
-    ring(x, y, "#ffd23f", r * CELL * 1.6);
+    ring(x, y, "#ffd23f", rPx * 1.6);
     if (big){
-      ring(x, y, "#ffffff", r * CELL * 2.6);
-      ring(x, y, "#ff1744", r * CELL);
+      ring(x, y, "#ffffff", rPx * 2.6);
+      ring(x, y, "#ff1744", rPx);
       shake = 22; boomFlash = 0.3; idleT = 0;
       blip(60, 0.9, "sawtooth", 0.16); blip(38, 1.1, "sine", 0.2);
       pop("BUNKER BUSTER!", W / 2, fieldMidY(), 28, "#ffc400", 1.6);
@@ -630,8 +789,8 @@
   function fireMissile(){
     if (missiles <= 0 || strike || state !== "play") return;
     let best = -1, bx = W / 2, by = fieldMidY();
-    const r = BLAST_R, R = Math.ceil(r);
-    for (let cy = 2; cy < ROWS - 1; cy += 2) for (let cx = 2; cx < COLS - 2; cx += 2){
+    const r = BLAST_PX / CELL, R = Math.ceil(r), step = Math.max(2, Math.round(24 / CELL));
+    for (let cy = 2; cy < ROWS - 1; cy += step) for (let cx = 2; cx < COLS - 2; cx += step){
       let n = 0;
       for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++){
         const x = cx + dx, y = cy + dy;
@@ -644,7 +803,7 @@
     // 2차 폭발 네 곳: 주 폭발 둘레에 연달아
     const sec = [];
     for (let j = 0; j < 4; j++){
-      const a = Math.random() * Math.PI * 2, d = BLAST_R * CELL * (0.9 + Math.random() * 0.5);
+      const a = Math.random() * Math.PI * 2, d = BLAST_PX * (0.9 + Math.random() * 0.5);
       sec.push({ x: clamp(bx + Math.cos(a) * d, CELL * 2, W - CELL * 2), y: by + Math.sin(a) * d, at: BOOM_AT + 0.12 * (j + 1), done: false });
     }
     strike = { x: bx, y: by, t: 0, drilled: TOP, boomed: false, sec };
@@ -659,15 +818,16 @@
       const my = missileY(s), cx = Math.floor(s.x / CELL);
       const fromRow = Math.max(0, Math.floor((s.drilled - TOP) / CELL));
       const toRow = Math.min(ROWS - 1, Math.floor((my - TOP) / CELL));
-      for (let y = fromRow; y <= toRow; y++) for (let dx = -1; dx <= 1; dx++){
+      const hw = Math.max(1, Math.floor(18 / CELL));   // 관통 폭 약 36px
+      for (let y = fromRow; y <= toRow; y++) for (let dx = -hw; dx <= hw; dx++){
         const x = cx + dx;
         if (x >= 0 && x < COLS) smash(y * COLS + x, ["#ffd23f", "#ff8c42", "#ffffff"]);
       }
       if (my > s.drilled){ s.drilled = my; }
       if (s.t - dt <= AIM_T + DIVE_T && s.t > AIM_T + DIVE_T){ shake = Math.max(shake, 6); blip(140, 0.12, "square", 0.06); }
     }
-    if (!s.boomed && s.t >= BOOM_AT){ s.boomed = true; blast(s.x, s.y, BLAST_R, true); }
-    for (const q of s.sec) if (!q.done && s.t >= q.at){ q.done = true; blast(q.x, q.y, 2.6, false); }
+    if (!s.boomed && s.t >= BOOM_AT){ s.boomed = true; blast(s.x, s.y, BLAST_PX, true); }
+    for (const q of s.sec) if (!q.done && s.t >= q.at){ q.done = true; blast(q.x, q.y, SEC_PX, false); }
     if (s.t > BOOM_AT + 0.7) strike = null;
   }
 
@@ -685,7 +845,7 @@
       const i = cellAt(px, py);
       if (i < 0) continue;
       if (grid[i] === WALL) bounce = true;
-      else { breakCell(i); b.idle = 0; if (pierceT <= 0) bounce = true; }
+      else { crack(i); b.idle = 0; if (pierceT <= 0) bounce = true; }
     }
     return bounce;
   }
@@ -835,7 +995,7 @@
       let n = Math.ceil(sweepRate * dt), swept = false;
       while (n-- > 0 && sweep.length){
         const i = sweep.pop();
-        grid[i] = EMPTY; paintCell(i); score += 10; swept = true;
+        grid[i] = EMPTY; paintCell(i); score += Math.round(10 * scoreMul()); swept = true;
         if (parts.length < 900) burst(i, 3, 260, CONFETTI);
       }
       if (swept && Math.random() < 0.5) blip(500 + Math.random() * 700, 0.04, "square", 0.02);
@@ -874,6 +1034,26 @@
       balls[0].x = paddle.x; balls[0].y = PADDLE_Y - BALL_R - 2;
       if (settings.auto && (timer += dt) > 0.6) launch();
       return;
+    }
+
+    // 러시: 2분이 지나면 3초마다, 2분 30초가 지나면 1.5초마다 강한 무기가 떨어진다
+    levelT += dt;
+    if (rush < 1 && levelT > RUSH_AT){
+      rush = 1; missiles = Math.min(MISSILE_MAX, missiles + 1);
+      pop("RUSH TIME!", W / 2, fieldMidY(), 32, "#ffc400", 1.8);
+      shake = Math.max(shake, 10); fireworks(3); haptic(2);
+      fanfare([392, 523, 659, 784], 80);
+    }
+    if (rush < 2 && levelT > FINAL_AT){
+      rush = 2; missiles = MISSILE_MAX;
+      pop("FINAL BLAST!", W / 2, fieldMidY(), 34, "#ff1744", 1.8);
+      shake = Math.max(shake, 14); fireworks(5); haptic(3);
+      fanfare([523, 659, 784, 1047], 70);
+    }
+    if (rush && (rushT -= dt) <= 0){
+      rushT = rush === 1 ? 3 : 1.5;
+      const kinds = ["mega", "laser", "missile", "mega", "plus3"];
+      drops.push({ x: 30 + Math.random() * (W - 60), y: TOP + ROWS * CELL + ITEM_R, kind: kinds[(Math.random() * kinds.length) | 0] });
     }
 
     // 벙커버스터 진행, 자동 진행은 막히거나 꽉 차면 쏜다
@@ -1033,7 +1213,7 @@
 
     // 벙커버스터: 조준경이 깜빡이고, 미사일이 내리꽂혀 박힌 채 깜빡이다가 터진다
     if (strike && strike.t < BOOM_AT){
-      const r = BLAST_R * CELL, blink = Math.floor(strike.t * (strike.t > AIM_T + DIVE_T ? 24 : 12)) % 2;
+      const r = BLAST_PX, blink = Math.floor(strike.t * (strike.t > AIM_T + DIVE_T ? 24 : 12)) % 2;
       ctx.strokeStyle = blink ? "#ff1744" : "#ffffff";
       ctx.lineWidth = 2;
       ctx.beginPath(); ctx.arc(strike.x, strike.y, r, 0, Math.PI * 2); ctx.stroke();
@@ -1087,10 +1267,12 @@
     const by = H - safeBot - 14, bw = W - 28;
     const prog = clamp(broken / (totalGreen * CLEAR_AT), 0, 1);
     ctx.fillStyle = COL.track; roundRect(14, by, bw, 4, 2);
-    if (prog > 0){ ctx.fillStyle = COL.bar; roundRect(14, by, Math.max(4, bw * prog), 4, 2); }
+    // 러시 중에는 진행 바가 금색·빨간색으로 깜빡인다
+    const barCol = rush ? (Math.floor(performance.now() / 150) % 2 ? "#ffc400" : COL.bar) : COL.bar;
+    if (prog > 0){ ctx.fillStyle = barCol; roundRect(14, by, Math.max(4, bw * prog), 4, 2); }
 
     if (state === "ready" && !settings.auto) banner("LEVEL " + level, "화면을 눌러 발사 · 끌어서 이동");
-    else if (state === "clear") banner("LEVEL " + level + " CLEAR", "+" + (1000 + level * 200).toLocaleString() + " 보너스");
+    else if (state === "clear") banner("LEVEL " + level + " " + TIERS[tier].title, "+" + clearBonus().toLocaleString() + " 보너스");
     else if (state === "over" && settings.auto) banner("GAME OVER", "잠시 후 다시 시작해요");
 
     // 화면 전체 번쩍임: 착탄은 흰색, 공을 놓치면 빨간색
@@ -1112,7 +1294,7 @@
     $("missileCount").textContent = missiles;
     const el = $("lives");
     el.innerHTML = "";
-    for (let i = 0; i < D.lives; i++){
+    for (let i = 0; i < Math.max(D.lives, lives); i++){   // 보상으로 기본보다 많아질 수 있다
       const d = document.createElement("i");
       if (i >= lives) d.className = "out";
       el.appendChild(d);
