@@ -469,19 +469,10 @@
     return GREEN;
   }
 
-  // ── 박힌 아이템: 공이 그 자리까지 파고들어 깨야 풀려나는 "과실" ──
+  // ── 박힌 아이템: 공이 그 칸까지 파고들어 깨야 풀려나는 "과실" (칸 하나, 아이템 색) ──
   // 깊이별로 고르게 퍼뜨리고, 깊은(위쪽) 자리일수록 센 아이템을 둔다
-  const GEM_R = 10;
-  const GEM_KINDS = ["missile", "mega", "laser", "plus3", "pierce", "plus3", "laser", "mega", "wide", "plus3"];
-  function cellsAround(px, ly, r){
-    const out = [];
-    const x0 = Math.floor((px - r) / CELL), x1 = Math.floor((px + r) / CELL);
-    const y0 = Math.floor((ly - r) / CELL), y1 = Math.floor((ly + r) / CELL);
-    for (let y = Math.max(0, y0); y <= Math.min(ROWS - 1, y1); y++) for (let x = Math.max(0, x0); x <= Math.min(COLS - 1, x1); x++){
-      if (Math.hypot((x + 0.5) * CELL - px, (y + 0.5) * CELL - ly) <= r) out.push(y * COLS + x);
-    }
-    return out;
-  }
+  // 패들 늘리기(진한 초록)는 초록 칸 사이에서 안 보여서 넣지 않는다
+  const GEM_KINDS = ["missile", "mega", "laser", "plus3", "pierce", "plus3", "laser", "mega", "pierce", "plus3"];
   function placeGems(rnd){
     gems = []; gemOf = new Map();
     // 바닥 15%를 뺀 높이를 깊이별 띠 n개로 나누고, 띠마다 무작위 자리 하나 (가장 위 띠가 가장 깊다)
@@ -497,11 +488,9 @@
         const i = cand[Math.floor(rnd() * cand.length)];
         const x = (i % COLS + 0.5) * CELL, y = (((i / COLS) | 0) + 0.5) * CELL;
         if (gems.some(g => Math.hypot(g.x - x, g.ly - y) < 48)) continue;
-        const cells = cellsAround(x, y, GEM_R);
-        if (!cells.length || cells.some(j => grid[j] !== GREEN)) continue;
         const g = { x, ly: y, kind: GEM_KINDS[k % GEM_KINDS.length], taken: false };
         gems.push(g);
-        for (const j of cells) gemOf.set(j, g);
+        gemOf.set(i, g);
         break;
       }
     }
@@ -570,7 +559,8 @@
     if (v === EMPTY) return;
     fctx.fillStyle = v === WALL ? COL.wallLine : COL.greenLine;
     fctx.fillRect(x, y, CELL, CELL);
-    fctx.fillStyle = v === WALL ? COL.wall : COL.green;
+    const gem = v === GREEN && gemOf.get(i);          // 박힌 아이템 칸은 아이템 색으로만 칠한다
+    fctx.fillStyle = v === WALL ? COL.wall : gem && !gem.taken ? ITEMS[gem.kind].color : COL.green;
     fctx.fillRect(x + 1, y + 1, CELL - 2, CELL - 2);
     fctx.fillStyle = "rgba(255,255,255,.10)";
     fctx.fillRect(x + 1, y + 1, CELL - 2, 1.5);
@@ -1244,20 +1234,6 @@
     ctx.fillStyle = COL.bg;
     ctx.fillRect(-20, -20, W + 40, H + 40);
     ctx.drawImage(field, 0, TOP, W, ROWS * CELL);
-
-    // 박힌 아이템: 어두운 받침 위에서 테두리가 숨 쉬듯 빛난다
-    const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 260);
-    for (const g of gems){
-      if (g.taken) continue;
-      const gy = TOP + g.ly;
-      ctx.fillStyle = "rgba(0,0,0,.4)";
-      ctx.beginPath(); ctx.arc(g.x, gy, GEM_R + 3, 0, Math.PI * 2); ctx.fill();
-      ctx.globalAlpha = 0.45 + 0.55 * pulse;
-      ctx.strokeStyle = ITEMS[g.kind].color; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(g.x, gy, GEM_R + 3 + pulse * 2.5, 0, Math.PI * 2); ctx.stroke();
-      ctx.globalAlpha = 1; ctx.lineWidth = 1;
-      drawItem({ x: g.x, y: gy, kind: g.kind });
-    }
 
     // 깨진 칸이 잠깐 하얗게 번쩍인다
     ctx.fillStyle = "#ffffff";
