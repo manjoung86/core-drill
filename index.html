@@ -180,8 +180,10 @@
     plus3:  { color:"#1fb6d9", good:true },
     wide:   { color:"#1d8a1d", good:true },
     pierce: { color:"#e7b5e6", good:true },
+    laser:  { color:"#e53935", good:true },
     shrink: { color:"#f79a63", good:false }
   };
+  const SHOT_SPEED = 620, SHOT_GAP = 0.18;  // 레이저 총알 속도(px/s)와 발사 간격(s)
 
   const $ = id => document.getElementById(id);
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
@@ -254,13 +256,13 @@
   const rowsFor = () => clamp(Math.floor((PADDLE_Y - 200 - TOP) / CELL), 22, 46);
 
   // ── 상태 ────────────────────────────────────────────────
-  let balls = [], drops = [], parts = [];
+  let balls = [], drops = [], parts = [], shots = [];
   const paddle = { x: W / 2, w: 74, target: W / 2 };
   let game = { diff: settings.diff }, D = DIFF[game.diff];
   let score = 0, level = 1, lives = 3, totalGreen = 1, broken = 0, assisted = false;
   let state = "menu";               // menu | ready | play | pause | clear | over
   let resumeTo = "play", pausedByHide = false;
-  let sizeMul = 1, sizeT = 0, pierceT = 0, shake = 0;
+  let sizeMul = 1, sizeT = 0, pierceT = 0, laserT = 0, shotT = 0, shake = 0;
   let timer = 0;                    // ready·clear·over 상태에서 쓰는 시간
   let idleT = 0;                    // 마지막으로 벽돌을 깬 뒤 지난 시간
   let keyL = false, keyR = false;
@@ -374,8 +376,8 @@
 
   function resetBall(){
     balls = [{ x: paddle.x, y: PADDLE_Y - BALL_R - 2, vx: 0, vy: 0, stuck: true }];
-    drops = [];
-    sizeMul = 1; sizeT = 0; pierceT = 0;
+    drops = []; shots = [];
+    sizeMul = 1; sizeT = 0; pierceT = 0; laserT = 0;
     state = "ready"; timer = 0; idleT = 0;
   }
   function newGame(){
@@ -411,7 +413,7 @@
     }
     paintField();
     score += 1000 + level * 200;
-    drops = [];
+    drops = []; shots = [];
     state = "clear"; timer = 0; shake = 6;
     blip(660, 0.18, "triangle", 0.06);
     setTimeout(() => blip(990, 0.3, "triangle", 0.05), 140);
@@ -431,7 +433,7 @@
     brickBlip();
     if (Math.random() < D.drop && drops.length < 8){
       const r = Math.random();
-      const kind = Math.random() < D.bad ? "shrink" : r < 0.65 ? "plus3" : r < 0.85 ? "wide" : "pierce";
+      const kind = Math.random() < D.bad ? "shrink" : r < 0.55 ? "plus3" : r < 0.72 ? "laser" : r < 0.87 ? "wide" : "pierce";
       drops.push({ x: (i % COLS) * CELL + CELL / 2, y: ((i / COLS) | 0) * CELL + TOP + CELL / 2, kind });
     }
   }
@@ -446,6 +448,7 @@
     else if (kind === "wide"){ sizeMul = 1.5; sizeT = 12; }
     else if (kind === "shrink"){ sizeMul = 0.6; sizeT = 10; }
     else if (kind === "pierce"){ pierceT = 6; }
+    else if (kind === "laser"){ laserT = 8; }
     if (ITEMS[kind].good){ blip(660, 0.12, "triangle", 0.06); blip(990, 0.12, "triangle", 0.04); }
     else blip(180, 0.2, "sawtooth", 0.05);
   }
@@ -602,6 +605,28 @@
       return;
     }
 
+    // 레이저: 패들 양 끝에서 자동으로 쏘고, 총알은 처음 닿는 칸에서 사라진다
+    if (laserT > 0){
+      laserT -= dt;
+      if ((shotT -= dt) <= 0){
+        shotT = SHOT_GAP;
+        const ex = paddle.w / 2 - 4;
+        shots.push({ x: paddle.x - ex, y: PADDLE_Y - 2 }, { x: paddle.x + ex, y: PADDLE_Y - 2 });
+        blip(880, 0.02, "square", 0.015);
+      }
+    }
+    for (let i = shots.length - 1; i >= 0; i--){
+      const s = shots[i];
+      let gone = false;
+      for (let k2 = 0; k2 < 2 && !gone; k2++){
+        s.y -= SHOT_SPEED * dt / 2;
+        const c = cellAt(s.x, s.y);
+        if (c >= 0){ if (grid[c] === GREEN) breakCell(c); gone = true; }
+        else if (s.y < TOP) gone = true;
+      }
+      if (gone) shots.splice(i, 1);
+    }
+
     // 12초 동안 못 깨면 도움으로 +3 아이템을 떨어뜨린다
     if ((idleT += dt) > 12){
       idleT = 0;
@@ -663,6 +688,7 @@
       ctx.textAlign = "left";
     }
     else if (d.kind === "shrink") ctx.fillRect(d.x - 5, d.y - 1.5, 10, 3);
+    else if (d.kind === "laser"){ ctx.fillRect(d.x - 4.5, d.y - 5, 2.5, 10); ctx.fillRect(d.x + 2, d.y - 5, 2.5, 10); }
     else { ctx.fillStyle = "#7a3d78"; ctx.fillRect(d.x - 1.5, d.y - 5.5, 3, 11); }
   }
 
@@ -688,9 +714,19 @@
     for (const b of balls){ ctx.moveTo(b.x + BALL_R, b.y); ctx.arc(b.x, b.y, BALL_R, 0, Math.PI * 2); }
     ctx.fill();
 
-    // 패들
+    // 레이저 총알
+    ctx.fillStyle = ITEMS.laser.color;
+    for (const s of shots) ctx.fillRect(s.x - 1, s.y - 8, 2, 8);
+
+    // 패들 (레이저 중이면 양 끝에 포신)
     ctx.fillStyle = COL.paddle;
     ctx.fillRect(paddle.x - paddle.w / 2, PADDLE_Y, paddle.w, PADDLE_H);
+    if (laserT > 0){
+      ctx.fillStyle = ITEMS.laser.color;
+      const ex = paddle.w / 2 - 4;
+      ctx.fillRect(paddle.x - ex - 2, PADDLE_Y - 5, 4, 5);
+      ctx.fillRect(paddle.x + ex - 2, PADDLE_Y - 5, 4, 5);
+    }
 
     // 진행 바
     const by = H - safeBot - 14, bw = W - 28;
