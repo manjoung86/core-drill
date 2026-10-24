@@ -192,7 +192,8 @@
   const EMPTY = 0, GREEN = 1, WALL = 2;
   const BALL_R = 3.6, MAX_BALLS = 300, PADDLE_H = 9;
   const ITEM_R = 10, ITEM_SPEED = 120;
-  const CLEAR_AT = 0.9;                     // 초록 칸 90%를 깨면 클리어 (나머지는 터뜨린다)
+  const CLEAR_AT = 1;                       // 초록 칸을 전부 깨야 클리어
+  const lastN = () => Math.max(10, Math.ceil(totalGreen * 0.03));   // 이만큼 남으면 막판 표시
   const AUTO_SPEED = 820;                   // 자동 진행 패들 최고 속도(px/s)
 
   const DIFF = {
@@ -715,6 +716,8 @@
     const prog = broken / (totalGreen * CLEAR_AT);
     if (milestone < 1 && prog >= 0.5){ milestone = 1; pop("HALF WAY!", W / 2, fieldMidY() + 40, 22, "#3ec1d3", 1.3); }
     if (milestone < 2 && prog >= 0.75){ milestone = 2; pop("75%!", W / 2, fieldMidY() + 40, 26, "#3ec1d3", 1.3); }
+    const left = totalGreen - broken;
+    if (milestone < 3 && left > 0 && left <= lastN()){ milestone = 3; pop("LAST " + left + "!", W / 2, fieldMidY() + 40, 26, "#ffffff", 1.3); haptic(1); }
     brickBlip();
     if (Math.random() < D.drop * CELL * CELL / 144 && drops.length < 8){   // 면적당 확률은 해상도와 무관
       const r = Math.random();
@@ -1104,6 +1107,15 @@
       if (gone) shots.splice(i, 1);
     }
 
+    // 막판 도움: 마지막 몇 칸을 8초 동안 못 깨면 벙커버스터를 준다 (남은 칸 쪽으로 자동 조준된다)
+    const leftNow = totalGreen - broken;
+    if (leftNow > 0 && leftNow <= lastN() && idleT > 8){
+      idleT = 0;
+      missiles = Math.min(MISSILE_MAX, missiles + 1);
+      pop("FINISHER +1 ▼", W / 2, fieldMidY() + 40, 18, "#ffc400", 1.4);
+      haptic(1);
+    }
+
     // 12초 동안 못 깨면 도움으로 +3 아이템을 떨어뜨린다
     if ((idleT += dt) > 12){
       idleT = 0;
@@ -1189,6 +1201,17 @@
       ctx.fillRect(f.x, f.y, CELL, CELL);
     }
     ctx.globalAlpha = 1;
+
+    // 막판: 남은 초록 칸이 하얗게 깜빡여 어디가 남았는지 보인다
+    const left = totalGreen - broken;
+    if ((state === "play" || state === "ready") && left > 0 && left <= lastN()){
+      ctx.strokeStyle = "rgba(255,255,255," + (0.45 + 0.45 * Math.sin(performance.now() / 120)) + ")";
+      ctx.lineWidth = 1.5;
+      for (let i = 0; i < grid.length; i++){
+        if (grid[i] === GREEN) ctx.strokeRect((i % COLS) * CELL + 0.75, TOP + ((i / COLS) | 0) * CELL + 0.75, CELL - 1.5, CELL - 1.5);
+      }
+      ctx.lineWidth = 1;
+    }
 
     for (const d of drops) drawItem(d);
 
@@ -1292,6 +1315,12 @@
     // 러시 중에는 진행 바가 금색·빨간색으로 깜빡인다
     const barCol = rush ? (Math.floor(performance.now() / 150) % 2 ? "#ffc400" : COL.bar) : COL.bar;
     if (prog > 0){ ctx.fillStyle = barCol; roundRect(14, by, Math.max(4, bw * prog), 4, 2); }
+    if ((state === "play" || state === "ready") && left > 0 && left <= lastN()){
+      ctx.fillStyle = "#ffffff"; ctx.textAlign = "right";
+      ctx.font = '11px Silkscreen, ui-monospace, monospace';
+      ctx.fillText("LAST " + left, W - 14, by - 6);
+      ctx.textAlign = "left";
+    }
 
     if (state === "ready" && !settings.auto) banner("LEVEL " + level, "화면을 눌러 발사 · 끌어서 이동");
     else if (state === "clear") banner("LEVEL " + level + " " + TIERS[tier].title, "+" + clearGain.toLocaleString() + " 보너스");
