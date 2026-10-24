@@ -294,6 +294,7 @@
   // 러시: 한 스테이지가 2분을 넘기면 강한 무기를 쏟아부어 빨리 끝낸다
   const RUSH_AT = 120, FINAL_AT = 150;
   let levelT = 0, rush = 0, rushT = 0;
+  let missedThisLevel = false, clearGain = 0;   // 스피드·노미스 클리어 보너스 계산용
   // 연출: 튀어나오는 글자, 퍼지는 링, 깨진 칸 번쩍임, 클리어 연쇄 폭발
   let pops = [], rings = [], flashes = [], sweep = [], sweepRate = 0, redFlash = 0, boomFlash = 0;
   // 벙커버스터: 모아 뒀다가 버튼으로 쏘는 미사일
@@ -511,7 +512,7 @@
       if (grid[i] === GREEN) totalGreen++;
     }
     broken = 0; milestone = 0;
-    levelT = 0; rush = 0; rushT = 0;
+    levelT = 0; rush = 0; rushT = 0; missedThisLevel = false;
     paintField();
   }
 
@@ -536,7 +537,7 @@
   // ── 연출 도우미 ─────────────────────────────────────────
   const fieldMidY = () => TOP + ROWS * CELL * 0.5;
   function pop(text, x, y, size, color, life){
-    if (pops.length > 5) pops.shift();
+    if (pops.length > 8) pops.shift();
     pops.push({ text, x, y, size: size || 26, color: color || "#ffffff", t: 0, life: life || 1.1 });
   }
   function ring(x, y, color, max){ rings.push({ x, y, color, max: max || 60, t: 0 }); }
@@ -637,7 +638,7 @@
     blip(520, 0.07, "square", 0.05);
   }
   function loseLife(){
-    lives--; shake = 9; redFlash = 0.35;
+    lives--; shake = 9; redFlash = 0.35; missedThisLevel = true;
     blip(120, 0.35, "sawtooth", 0.06);
     pop("MISS", W / 2, fieldMidY(), 32, "#ff5a5f", 0.9);
     haptic(1);
@@ -653,15 +654,30 @@
     for (let i = 0; i < grid.length; i++) if (grid[i] === GREEN) sweep.push(i);
     sweep.sort((a, b) => a - b);               // pop()이 가장 아래 칸부터 꺼낸다
     sweepRate = sweep.length / 0.9;
-    score += clearBonus();
+    // 빨리 끝낼수록 보너스가 커진다: 30초 안 ×3, 60초 안 ×2, 공을 안 놓쳤으면 노미스 보너스
+    const speedMul = levelT < 30 ? 3 : levelT < 60 ? 2 : 1;
+    const noMiss = missedThisLevel ? 0 : Math.round(500 * scoreMul());
+    clearGain = clearBonus() * speedMul + noMiss;
+    score += clearGain;
     drops = []; shots = [];
-    state = "clear"; timer = 0; shake = 10;
-    pop(TIERS[tier].title, W / 2, fieldMidY() - 12, 30 + tier * 3, ["#ffd23f", "#3ec1d3", "#9b5de5", "#ff8c42", "#ff4fa3"][tier], 2.2);
-    pop("+" + clearBonus().toLocaleString(), W / 2, fieldMidY() + 26, 18, "#ffffff", 2.2);
-    ring(W / 2, fieldMidY(), "#ffd23f", 220);
-    fanfare([523, 659, 784, 1047, 1319], 90);
-    fireworks(8 + tier * 4);              // 단계가 높을수록 더 많이
-    haptic(3);
+    state = "clear"; timer = 0; shake = 10 + speedMul * 4;
+    const y0 = fieldMidY();
+    pop(TIERS[tier].title, W / 2, y0 - 40, 30 + tier * 3, ["#ffd23f", "#3ec1d3", "#9b5de5", "#ff8c42", "#ff4fa3"][tier], 2.4);
+    const t = Math.floor(levelT);
+    pop("TIME " + Math.floor(t / 60) + ":" + String(t % 60).padStart(2, "0"), W / 2, y0 - 8, 14, "#ffffff", 2.4);
+    if (speedMul === 3) pop("LIGHTNING! ×3", W / 2, y0 + 20, 28, "#ffe066", 2.4);
+    else if (speedMul === 2) pop("SPEED CLEAR! ×2", W / 2, y0 + 20, 22, "#3ec1d3", 2.4);
+    if (noMiss) pop("NO MISS +" + noMiss.toLocaleString(), W / 2, y0 + 48, 14, "#6cc02f", 2.4);
+    pop("+" + clearGain.toLocaleString(), W / 2, y0 + 74, 20, "#ffffff", 2.4);
+    ring(W / 2, y0, "#ffd23f", 220);
+    fanfare(speedMul > 1 ? [523, 659, 784, 1047, 1319, 1568, 2093] : [523, 659, 784, 1047, 1319], 80);
+    fireworks(8 + tier * 4 + (speedMul === 3 ? 12 : speedMul === 2 ? 6 : 0));   // 단계가 높고 빠를수록 더 많이
+    haptic(3 + (speedMul === 3 ? 1 : 0));
+    // 번개 클리어: 위에서 금빛 색종이가 쏟아진다
+    if (speedMul === 3) for (let j = 0; j < 120 && parts.length < 1200; j++){
+      parts.push({ x: Math.random() * W, y: TOP - 10 - Math.random() * 60, vx: (Math.random() - .5) * 50, vy: 60 + Math.random() * 120,
+        t: 0, life: 1.6 + Math.random(), c: j % 3 ? "#ffd23f" : "#ffffff", s: 3, g: 60 });
+    }
     if (strike){ missiles = Math.min(MISSILE_MAX, missiles + 1); strike = null; }
   }
 
@@ -1272,7 +1288,7 @@
     if (prog > 0){ ctx.fillStyle = barCol; roundRect(14, by, Math.max(4, bw * prog), 4, 2); }
 
     if (state === "ready" && !settings.auto) banner("LEVEL " + level, "화면을 눌러 발사 · 끌어서 이동");
-    else if (state === "clear") banner("LEVEL " + level + " " + TIERS[tier].title, "+" + clearBonus().toLocaleString() + " 보너스");
+    else if (state === "clear") banner("LEVEL " + level + " " + TIERS[tier].title, "+" + clearGain.toLocaleString() + " 보너스");
     else if (state === "over" && settings.auto) banner("GAME OVER", "잠시 후 다시 시작해요");
 
     // 화면 전체 번쩍임: 착탄은 흰색, 공을 놓치면 빨간색
