@@ -1,0 +1,835 @@
+<!doctype html>
+<!-- 공 여러 개로 미로형 벽돌밭을 갉아먹는 세로형 벽돌깨기 홈 화면 웹앱 (난이도·자동 진행 포함) -->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Core Drill</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Core Drill">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#1b1b1b">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" href="icon-180.png">
+<link rel="manifest" href="manifest.json">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&display=swap">
+<style>
+  :root{
+    color-scheme:dark;
+    --bg:#1b1b1b;
+    --card:#232323;
+    --line:#333333;
+    --ink:#f2f2f2;
+    --dim:#9a9a9a;
+    --green:#6cc02f;
+    --paddle:#f4845f;
+    --on:#34c759;
+  }
+  html,body{margin:0;height:100%;background:var(--bg);overflow:hidden;overscroll-behavior:none;}
+  body{
+    position:fixed;inset:0;
+    color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo",system-ui,sans-serif;
+    -webkit-user-select:none;user-select:none;
+    -webkit-touch-callout:none;
+    -webkit-tap-highlight-color:transparent;
+  }
+  .stage{
+    position:absolute;top:0;bottom:0;left:50%;
+    transform:translateX(-50%);
+    width:min(100vw, 60dvh);
+    overflow:hidden;
+    touch-action:none;
+  }
+  canvas{position:absolute;inset:0;width:100%;height:100%;display:block;}
+  .probe{position:absolute;visibility:hidden;padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom);}
+
+  /* ── HUD ───────────────────────────────── */
+  .hud{
+    position:absolute;left:0;right:0;top:0;
+    padding:calc(env(safe-area-inset-top) + 8px) 14px 0;
+    display:flex;align-items:center;justify-content:space-between;gap:10px;
+    pointer-events:none;
+  }
+  .hud .left{display:flex;flex-direction:column;gap:3px;}
+  .score{font-family:Silkscreen,ui-monospace,monospace;font-size:22px;line-height:1;font-variant-numeric:tabular-nums;}
+  .meta{font-size:11px;letter-spacing:.08em;color:var(--dim);font-variant-numeric:tabular-nums;}
+  .hud .right{display:flex;align-items:center;gap:10px;}
+  .lives{display:flex;gap:3px;}
+  .lives i{width:6px;height:11px;border-radius:1px;background:var(--paddle);display:block;}
+  .lives i.out{background:#3a3a3a;}
+  .badge{display:none;font-size:10px;font-weight:600;letter-spacing:.12em;padding:3px 6px;border:1px solid #2f7d2f;color:#8fe08f;border-radius:4px;}
+  .badge.on{display:inline-block;}
+  .icon-btn{
+    pointer-events:auto;appearance:none;
+    width:40px;height:40px;border-radius:10px;
+    border:1px solid var(--line);background:rgba(255,255,255,.04);
+    color:var(--ink);font:inherit;font-size:14px;font-weight:700;letter-spacing:-.05em;
+    display:grid;place-items:center;padding:0;
+  }
+
+  /* ── 메뉴 ──────────────────────────────── */
+  .panel{
+    position:absolute;inset:0;display:none;
+    align-items:center;justify-content:center;
+    padding:16px;box-sizing:border-box;
+    background:rgba(10,10,10,.72);
+    -webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);
+  }
+  .panel.show{display:flex;}
+  .card{
+    width:100%;max-width:330px;box-sizing:border-box;
+    background:var(--card);border:1px solid var(--line);border-radius:18px;
+    padding:24px 18px 18px;
+  }
+  .title{font-family:Silkscreen,ui-monospace,monospace;font-size:32px;line-height:1;text-align:center;letter-spacing:.02em;}
+  .title em{font-style:normal;color:var(--green);}
+  .sub{text-align:center;color:var(--dim);font-size:14px;margin-top:10px;min-height:1.2em;}
+  .row{margin-top:20px;}
+  .row-label{display:flex;justify-content:space-between;font-size:12px;color:var(--dim);margin-bottom:8px;}
+  .seg{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;background:#1a1a1a;border-radius:11px;padding:4px;}
+  .seg button{appearance:none;border:0;background:transparent;color:var(--dim);font:inherit;font-size:15px;padding:10px 0;border-radius:8px;}
+  .seg button[aria-pressed="true"]{background:#3c3c3c;color:var(--ink);font-weight:600;}
+  .toggle{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 2px;border-top:1px solid #2e2e2e;font-size:15px;}
+  .toggle small{display:block;color:var(--dim);font-size:12px;margin-top:2px;}
+  .switch{appearance:none;flex:none;position:relative;width:51px;height:31px;border:0;border-radius:16px;background:#3a3a3a;padding:0;transition:background .2s;}
+  .switch::after{content:"";position:absolute;top:2px;left:2px;width:27px;height:27px;border-radius:50%;background:#fff;transition:transform .2s;}
+  .switch[aria-checked="true"]{background:var(--on);}
+  .switch[aria-checked="true"]::after{transform:translateX(20px);}
+  .primary,.secondary{
+    display:block;width:100%;appearance:none;font:inherit;font-size:17px;font-weight:700;
+    padding:14px 0;border-radius:13px;
+  }
+  .primary{margin-top:14px;border:0;background:var(--paddle);color:#1b1b1b;}
+  .secondary{margin-top:8px;border:1px solid var(--line);background:transparent;color:var(--ink);}
+  .secondary[hidden]{display:none;}
+  .best{text-align:center;color:var(--dim);font-size:12px;margin-top:12px;font-variant-numeric:tabular-nums;}
+  button:focus-visible{outline:2px solid var(--green);outline-offset:2px;}
+</style>
+</head>
+<body>
+<div class="stage" id="stage">
+  <canvas id="game" aria-label="벽돌깨기 게임 화면"></canvas>
+  <div class="probe" id="probe"></div>
+
+  <div class="hud">
+    <div class="left">
+      <div class="score" id="score">0</div>
+      <div class="meta">LV <span id="level">1</span> · 공 <span id="ballCount">1</span></div>
+    </div>
+    <div class="right">
+      <span class="badge" id="autoBadge">AUTO</span>
+      <span class="lives" id="lives"></span>
+      <button class="icon-btn" id="pauseBtn" type="button" aria-label="일시정지">II</button>
+    </div>
+  </div>
+
+  <div class="panel show" id="panel">
+    <div class="card">
+      <div class="title">CORE<em>DRILL</em></div>
+      <div class="sub" id="panelSub">공으로 초록 벽돌밭을 갉아먹어요</div>
+      <div class="row">
+        <div class="row-label"><span>난이도</span><span id="diffNote"></span></div>
+        <div class="seg" id="diffSeg">
+          <button type="button" data-d="easy">쉬움</button>
+          <button type="button" data-d="normal">보통</button>
+          <button type="button" data-d="hard">어려움</button>
+        </div>
+      </div>
+      <div class="row">
+        <div class="toggle">
+          <div>자동 진행<small>AI가 대신 플레이해요</small></div>
+          <button class="switch" id="autoSw" type="button" role="switch" aria-label="자동 진행"></button>
+        </div>
+        <div class="toggle">
+          <div>소리</div>
+          <button class="switch" id="soundSw" type="button" role="switch" aria-label="소리"></button>
+        </div>
+      </div>
+      <button class="primary" id="primaryBtn" type="button">시작</button>
+      <button class="secondary" id="secondaryBtn" type="button" hidden>새 게임</button>
+      <div class="best" id="bestLine"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  "use strict";
+
+  // ── 상수 ────────────────────────────────────────────────
+  const W = 360, CELL = 12, COLS = W / CELL;
+  const EMPTY = 0, GREEN = 1, WALL = 2;
+  const BALL_R = 3.6, MAX_BALLS = 300, PADDLE_H = 9;
+  const ITEM_R = 10, ITEM_SPEED = 120;
+  const CLEAR_AT = 0.9;                     // 초록 칸 90%를 깨면 클리어 (나머지는 터뜨린다)
+  const AUTO_SPEED = 820;                   // 자동 진행 패들 최고 속도(px/s)
+
+  const DIFF = {
+    easy:   { name:"쉬움",   speed:250, paddle:92, lives:5, bad:0.12, drop:0.07 },
+    normal: { name:"보통",   speed:300, paddle:74, lives:3, bad:0.22, drop:0.06 },
+    hard:   { name:"어려움", speed:360, paddle:60, lives:2, bad:0.34, drop:0.05 }
+  };
+  const COL = {
+    bg:"#1b1b1b", green:"#4c9a1c", greenLine:"#2f6512", wall:"#8d8d8d", wallLine:"#5f5f5f",
+    ball:"#f7f7f7", pierce:"#f2b8ee", paddle:"#f4845f", track:"#3a3a3a", bar:"#e8174f", dim:"#9a9a9a"
+  };
+  const ITEMS = {
+    plus3:  { color:"#1fb6d9", good:true },
+    wide:   { color:"#1d8a1d", good:true },
+    pierce: { color:"#e7b5e6", good:true },
+    shrink: { color:"#f79a63", good:false }
+  };
+
+  const $ = id => document.getElementById(id);
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+  // ── 저장 ────────────────────────────────────────────────
+  const store = {
+    get(k, d){ try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch(e){ return d; } },
+    set(k, v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch(e){} }
+  };
+  const settings = Object.assign({ diff:"normal", auto:false, sound:true }, store.get("coredrill.settings", {}));
+  if (!DIFF[settings.diff]) settings.diff = "normal";
+  const saveSettings = () => store.set("coredrill.settings", settings);
+  const bestOf = d => store.get("coredrill.best." + d, 0) || 0;
+
+  // ── 사운드 ──────────────────────────────────────────────
+  let actx = null, lastBlip = 0;
+  function audio(){
+    if (!actx){ try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e){} }
+    if (actx && actx.state === "suspended") actx.resume();
+    return actx;
+  }
+  function blip(freq, dur, type, vol){
+    if (!settings.sound) return;
+    const a = audio(); if (!a) return;
+    const o = a.createOscillator(), g = a.createGain();
+    o.type = type || "square"; o.frequency.value = freq;
+    g.gain.setValueAtTime(vol || 0.05, a.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.0001, a.currentTime + (dur || 0.05));
+    o.connect(g); g.connect(a.destination);
+    o.start(); o.stop(a.currentTime + (dur || 0.05) + 0.01);
+  }
+  // 공이 많을 때 벽돌 소리가 겹치지 않게 간격을 둔다
+  function brickBlip(){
+    const now = performance.now();
+    if (now - lastBlip < 40) return;
+    lastBlip = now;
+    blip(420 + Math.random() * 260, 0.03, "square", 0.025);
+  }
+
+  // ── 난수 ────────────────────────────────────────────────
+  function mulberry32(a){
+    return function(){
+      a |= 0; a = a + 0x6D2B79F5 | 0;
+      let t = Math.imul(a ^ a >>> 15, 1 | a);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+  }
+
+  // ── 화면 배치 ───────────────────────────────────────────
+  const stage = $("stage"), cvs = $("game"), ctx = cvs.getContext("2d");
+  const field = document.createElement("canvas"), fctx = field.getContext("2d");
+  let H = 640, k = 1, safeTop = 0, safeBot = 0, TOP = 60, PADDLE_Y = 560;
+  let ROWS = 30, grid = new Uint8Array(COLS * ROWS);
+
+  function layout(){
+    // 페이지가 뜨는 순간 크기가 0일 수 있어 기본값을 둔다
+    const cw = stage.clientWidth || W, ch = stage.clientHeight || 640;
+    const scale = cw / W;
+    H = ch / scale;
+    k = Math.min(window.devicePixelRatio || 1, 3) * scale;
+    cvs.width = Math.round(W * k); cvs.height = Math.round(H * k);
+    const cs = getComputedStyle($("probe"));
+    safeTop = (parseFloat(cs.paddingTop) || 0) / scale;
+    safeBot = (parseFloat(cs.paddingBottom) || 0) / scale;
+    TOP = safeTop + 58;
+    PADDLE_Y = H - safeBot - 58;
+    paintField();
+  }
+  const rowsFor = () => clamp(Math.floor((PADDLE_Y - 200 - TOP) / CELL), 22, 46);
+
+  // ── 상태 ────────────────────────────────────────────────
+  let balls = [], drops = [], parts = [];
+  const paddle = { x: W / 2, w: 74, target: W / 2 };
+  let game = { diff: settings.diff }, D = DIFF[game.diff];
+  let score = 0, level = 1, lives = 3, totalGreen = 1, broken = 0, assisted = false;
+  let state = "menu";               // menu | ready | play | pause | clear | over
+  let resumeTo = "play", pausedByHide = false;
+  let sizeMul = 1, sizeT = 0, pierceT = 0, shake = 0;
+  let timer = 0;                    // ready·clear·over 상태에서 쓰는 시간
+  let idleT = 0;                    // 마지막으로 벽돌을 깬 뒤 지난 시간
+  let keyL = false, keyR = false;
+
+  // ── 레벨 생성: 벽으로 둘러싼 통로와 방을 판다 ───────────
+  function buildLevel(lv){
+    ROWS = rowsFor();
+    const N = COLS * ROWS;
+    grid = new Uint8Array(N).fill(GREEN);
+    const rnd = mulberry32(lv * 2654435761 + 7);
+    const ri = (a, b) => a + Math.floor(rnd() * (b - a + 1));
+    const carve = new Uint8Array(N);
+    const mark = (x, y) => { if (x >= 1 && x < COLS - 1 && y >= 1 && y < ROWS) carve[y * COLS + x] = 1; };
+    const block = (x, y) => { mark(x, y); mark(x + 1, y); mark(x, y + 1); mark(x + 1, y + 1); };
+
+    // 통로: 바닥에서 시작해 꺾이며 올라가는 폭 2칸 길
+    const D4 = [[0,-1],[1,0],[0,1],[-1,0]];
+    const corridors = 1 + Math.min(2, Math.ceil(lv / 2));
+    for (let c = 0; c < corridors; c++){
+      let x = ri(3, COLS - 5), y = ROWS - 2, dir = 0;
+      const segs = ri(3, 6);
+      for (let s = 0; s < segs; s++){
+        const len = dir === 0 ? ri(5, 11) : ri(4, 10);
+        for (let i = 0; i < len; i++){
+          block(x, y);
+          const nx = x + D4[dir][0], ny = y + D4[dir][1];
+          if (nx < 2 || nx > COLS - 4 || ny < 3) break;
+          x = nx; y = ny;
+        }
+        dir = dir === 0 ? (rnd() < 0.5 ? 1 : 3) : 0;
+      }
+    }
+    // 방: 벽으로 둘러싼 빈 사각형
+    const rooms = ri(1, 2) + (lv > 3 ? 1 : 0);
+    for (let r = 0; r < rooms; r++){
+      const w = ri(6, 12), h = ri(4, 7);
+      const x0 = ri(3, COLS - 4 - w), y0 = ri(3, ROWS - 10 - h);
+      for (let y = y0; y < y0 + h; y++) for (let x = x0; x < x0 + w; x++) mark(x, y);
+    }
+
+    // 판 곳 둘레를 벽으로
+    for (let i = 0; i < N; i++){
+      if (carve[i]) continue;
+      const x = i % COLS, y = (i / COLS) | 0;
+      search: for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++){
+        const xx = x + dx, yy = y + dy;
+        if (xx < 0 || xx >= COLS || yy < 0 || yy >= ROWS) continue;
+        if (carve[yy * COLS + xx]){ grid[i] = WALL; break search; }
+      }
+    }
+    for (let i = 0; i < N; i++) if (carve[i]) grid[i] = EMPTY;
+
+    // 벽 틈: 벽을 점선처럼 2칸씩 끊어 벽 뒤 초록 칸이 갇히지 않게 한다
+    for (let i = 0; i < N; i++){
+      if (grid[i] !== WALL || rnd() >= 0.18) continue;
+      const x = i % COLS;
+      grid[i] = GREEN;
+      if (x + 1 < COLS && grid[i + 1] === WALL) grid[i + 1] = GREEN;
+      else if (i + COLS < N && grid[i + COLS] === WALL) grid[i + COLS] = GREEN;
+    }
+
+    // 테두리: 왼쪽·오른쪽·위 (아래는 열려 있다)
+    for (let y = 0; y < ROWS; y++){ grid[y * COLS] = WALL; grid[y * COLS + COLS - 1] = WALL; }
+    for (let x = 0; x < COLS; x++) grid[x] = WALL;
+
+    // 바닥에서 닿지 않는 초록 칸은 비운다
+    const seen = new Uint8Array(N), queue = [];
+    for (let x = 0; x < COLS; x++){
+      const i = (ROWS - 1) * COLS + x;
+      if (grid[i] !== WALL){ seen[i] = 1; queue.push(i); }
+    }
+    while (queue.length){
+      const i = queue.pop(), x = i % COLS, y = (i / COLS) | 0;
+      for (const [dx, dy] of D4){
+        const xx = x + dx, yy = y + dy;
+        if (xx < 0 || xx >= COLS || yy < 0 || yy >= ROWS) continue;
+        const j = yy * COLS + xx;
+        if (!seen[j] && grid[j] !== WALL){ seen[j] = 1; queue.push(j); }
+      }
+    }
+    totalGreen = 0;
+    for (let i = 0; i < N; i++){
+      if (grid[i] === GREEN && !seen[i]) grid[i] = EMPTY;
+      if (grid[i] === GREEN) totalGreen++;
+    }
+    broken = 0;
+    paintField();
+  }
+
+  // ── 벽돌밭 그리기 (바뀐 칸만 다시 그린다) ──────────────
+  function paintCell(i){
+    const x = (i % COLS) * CELL, y = ((i / COLS) | 0) * CELL, v = grid[i];
+    fctx.clearRect(x, y, CELL, CELL);
+    if (v === EMPTY) return;
+    fctx.fillStyle = v === WALL ? COL.wallLine : COL.greenLine;
+    fctx.fillRect(x, y, CELL, CELL);
+    fctx.fillStyle = v === WALL ? COL.wall : COL.green;
+    fctx.fillRect(x + 1, y + 1, CELL - 2, CELL - 2);
+    fctx.fillStyle = "rgba(255,255,255,.10)";
+    fctx.fillRect(x + 1, y + 1, CELL - 2, 1.5);
+  }
+  function paintField(){
+    field.width = Math.round(W * k); field.height = Math.round(ROWS * CELL * k);
+    fctx.setTransform(k, 0, 0, k, 0, 0);
+    for (let i = 0; i < grid.length; i++) paintCell(i);
+  }
+
+  // ── 게임 흐름 ───────────────────────────────────────────
+  const baseW = () => D.paddle;
+  const ballSpeed = () => D.speed * (1 + Math.min(level - 1, 10) * 0.03);
+
+  function resetBall(){
+    balls = [{ x: paddle.x, y: PADDLE_Y - BALL_R - 2, vx: 0, vy: 0, stuck: true }];
+    drops = [];
+    sizeMul = 1; sizeT = 0; pierceT = 0;
+    state = "ready"; timer = 0; idleT = 0;
+  }
+  function newGame(){
+    game.diff = settings.diff; D = DIFF[game.diff];
+    score = 0; level = 1; lives = D.lives; assisted = settings.auto;
+    paddle.w = baseW(); paddle.x = paddle.target = W / 2;
+    buildLevel(level); resetBall();
+    hidePanel();
+  }
+  function launch(){
+    const b = balls[0];
+    if (!b || !b.stuck) return;
+    const a = -Math.PI / 2 + (Math.random() - 0.5) * 0.5, s = ballSpeed();
+    b.stuck = false; b.vx = Math.cos(a) * s; b.vy = Math.sin(a) * s;
+    state = "play";
+    blip(520, 0.07, "square", 0.05);
+  }
+  function loseLife(){
+    lives--; shake = 9;
+    blip(120, 0.35, "sawtooth", 0.06);
+    if (lives > 0){ resetBall(); return; }
+    state = "over"; timer = 0;
+    const isBest = !assisted && score > bestOf(game.diff);
+    if (isBest) store.set("coredrill.best." + game.diff, score);
+    if (!settings.auto) showPanel("over", isBest);
+  }
+  function levelClear(){
+    // 남은 초록 칸을 한꺼번에 터뜨린다
+    for (let i = 0; i < grid.length; i++){
+      if (grid[i] !== GREEN) continue;
+      grid[i] = EMPTY; score += 10;
+      if (parts.length < 600 && i % 2 === 0) burst(i, 2);
+    }
+    paintField();
+    score += 1000 + level * 200;
+    drops = [];
+    state = "clear"; timer = 0; shake = 6;
+    blip(660, 0.18, "triangle", 0.06);
+    setTimeout(() => blip(990, 0.3, "triangle", 0.05), 140);
+  }
+
+  // ── 벽돌 깨기와 아이템 ──────────────────────────────────
+  function burst(i, n){
+    const x = (i % COLS) * CELL + CELL / 2, y = ((i / COLS) | 0) * CELL + TOP + CELL / 2;
+    for (let j = 0; j < n; j++){
+      parts.push({ x, y, vx:(Math.random() - .5) * 120, vy:(Math.random() - .5) * 120 - 30, t:0, life:.3 + Math.random() * .35 });
+    }
+  }
+  function breakCell(i){
+    grid[i] = EMPTY; paintCell(i);
+    broken++; score += 10; idleT = 0;
+    if (parts.length < 400) burst(i, 2);
+    brickBlip();
+    if (Math.random() < D.drop && drops.length < 8){
+      const r = Math.random();
+      const kind = Math.random() < D.bad ? "shrink" : r < 0.65 ? "plus3" : r < 0.85 ? "wide" : "pierce";
+      drops.push({ x: (i % COLS) * CELL + CELL / 2, y: ((i / COLS) | 0) * CELL + TOP + CELL / 2, kind });
+    }
+  }
+  function applyItem(kind){
+    if (kind === "plus3"){
+      const s = ballSpeed();
+      for (let j = -1; j <= 1 && balls.length < MAX_BALLS; j++){
+        const a = -Math.PI / 2 + j * 0.38;
+        balls.push({ x: paddle.x, y: PADDLE_Y - BALL_R - 2, vx: Math.cos(a) * s, vy: Math.sin(a) * s, stuck:false });
+      }
+    }
+    else if (kind === "wide"){ sizeMul = 1.5; sizeT = 12; }
+    else if (kind === "shrink"){ sizeMul = 0.6; sizeT = 10; }
+    else if (kind === "pierce"){ pierceT = 6; }
+    if (ITEMS[kind].good){ blip(660, 0.12, "triangle", 0.06); blip(990, 0.12, "triangle", 0.04); }
+    else blip(180, 0.2, "sawtooth", 0.05);
+  }
+
+  // ── 공 이동과 충돌 ──────────────────────────────────────
+  function cellAt(px, py){
+    const cx = Math.floor(px / CELL), cy = Math.floor((py - TOP) / CELL);
+    if (cx < 0 || cx >= COLS || cy < 0 || cy >= ROWS) return -1;
+    const i = cy * COLS + cx;
+    return grid[i] === EMPTY ? -1 : i;
+  }
+  // 공의 앞쪽 가장자리 두 점을 검사해 튕길지 정한다
+  function hits(b, x1, y1, x2, y2){
+    let bounce = false;
+    for (const [px, py] of [[x1, y1], [x2, y2]]){
+      const i = cellAt(px, py);
+      if (i < 0) continue;
+      if (grid[i] === WALL) bounce = true;
+      else { breakCell(i); b.idle = 0; if (pierceT <= 0) bounce = true; }
+    }
+    return bounce;
+  }
+  // 한동안 벽돌을 못 깬 공은 벽에 튕길 때 각도를 살짝 흔들어 갇힌 궤도에서 빼낸다
+  function nudge(b){
+    if ((b.idle || 0) < 4) return;
+    const s = Math.hypot(b.vx, b.vy);
+    let a = Math.atan2(b.vy, b.vx) + (Math.random() - 0.5) * 0.8;
+    if (Math.abs(Math.sin(a)) < 0.35) a = Math.atan2(Math.sign(b.vy || 1) * 0.35, Math.sign(Math.cos(a)) * 0.94);
+    b.vx = Math.cos(a) * s; b.vy = Math.sin(a) * s;
+  }
+  function stepBall(b, dt){
+    const o = BALL_R * 0.7;
+    const nx = b.x + b.vx * dt;
+    if (b.vx){
+      const ex = nx + Math.sign(b.vx) * BALL_R;
+      if (hits(b, ex, b.y - o, ex, b.y + o)){ b.vx = -b.vx; nudge(b); } else b.x = nx;
+    }
+    const ny = b.y + b.vy * dt;
+    const ey = ny + Math.sign(b.vy) * BALL_R;
+    if (hits(b, b.x - o, ey, b.x + o, ey)){ b.vy = -b.vy; nudge(b); } else b.y = ny;
+
+    if (b.x < BALL_R){ b.x = BALL_R; b.vx = Math.abs(b.vx); }
+    if (b.x > W - BALL_R){ b.x = W - BALL_R; b.vx = -Math.abs(b.vx); }
+    if (b.y < TOP + BALL_R){ b.y = TOP + BALL_R; b.vy = Math.abs(b.vy); }
+
+    const half = paddle.w / 2;
+    if (b.vy > 0 && b.y + BALL_R >= PADDLE_Y && b.y - BALL_R <= PADDLE_Y + PADDLE_H
+        && b.x >= paddle.x - half - BALL_R && b.x <= paddle.x + half + BALL_R){
+      let off = clamp((b.x - paddle.x) / half, -1, 1);
+      // 수직으로 튀면 벽 통로를 같은 길로 오르내리므로 최소 기울기를 둔다
+      if (Math.abs(off) < 0.15) off = (off < 0 || (off === 0 && Math.random() < 0.5) ? -1 : 1) * 0.15;
+      const a = -Math.PI / 2 + off * 1.05, s = ballSpeed();
+      b.vx = Math.cos(a) * s; b.vy = Math.sin(a) * s;
+      b.y = PADDLE_Y - BALL_R - 0.5;
+      b.aim = null;
+      blip(190, 0.04, "sine", 0.05);
+    }
+  }
+
+  // ── 자동 진행 ───────────────────────────────────────────
+  // 벽 반사를 고려해 공이 패들 높이에 닿을 x를 구한다
+  function reflectX(x){
+    const lo = BALL_R, span = W - 2 * BALL_R;
+    let u = (x - lo) % (2 * span);
+    if (u < 0) u += 2 * span;
+    return lo + (u > span ? 2 * span - u : u);
+  }
+  // 아래에서 곧장 보이는 초록 칸이 있는 열 중 하나를 골라 그 x를 돌려준다
+  function pickAim(){
+    const cols = [];
+    for (let x = 1; x < COLS - 1; x++){
+      for (let y = ROWS - 1; y >= 0; y--){
+        const v = grid[y * COLS + x];
+        if (v === EMPTY) continue;
+        if (v === GREEN) cols.push(x);
+        break;
+      }
+    }
+    return cols.length ? (cols[Math.floor(Math.random() * cols.length)] + 0.5) * CELL : Math.random() * W;
+  }
+  function autoControl(dt){
+    const half = paddle.w / 2;
+    let target = null, soon = Infinity;
+    for (const b of balls){
+      if (b.stuck || b.vy <= 0) continue;
+      const t = (PADDLE_Y - BALL_R - b.y) / b.vy;
+      if (t >= 0 && t < soon){ soon = t; target = b; }
+    }
+    let tx = paddle.target;
+    if (target){
+      const px = reflectX(target.x + target.vx * soon);
+      // 고른 열을 향하는 반사 각도가 나오도록 패들 어디로 받을지 정한다
+      if (target.aim == null) target.aim = pickAim();
+      const rise = PADDLE_Y - (TOP + ROWS * CELL);
+      const off = clamp(Math.atan2(target.aim - px, rise) / 1.05, -0.85, 0.85);
+      tx = px - off * half;
+    }
+    // 급한 공이 없으면 좋은 아이템을 받으러 간다
+    if (!target || soon > 0.9){
+      let item = null;
+      for (const d of drops) if (ITEMS[d.kind].good && d.y < PADDLE_Y && (!item || d.y > item.y)) item = d;
+      if (item && (!target || (PADDLE_Y - item.y) / ITEM_SPEED < soon - 0.3)) tx = item.x;
+    }
+    // 나쁜 아이템이 곧 떨어질 자리라면 비켜선다
+    for (const d of drops){
+      if (ITEMS[d.kind].good) continue;
+      const t = (PADDLE_Y - d.y) / ITEM_SPEED;
+      if (t > 0 && t < 0.5 && Math.abs(d.x - tx) < half + ITEM_R && (!target || soon > t + 0.25)){
+        tx = d.x + (tx >= d.x ? 1 : -1) * (half + ITEM_R + 4);
+      }
+    }
+    paddle.target = clamp(tx, half, W - half);
+    paddle.x += clamp(paddle.target - paddle.x, -AUTO_SPEED * dt, AUTO_SPEED * dt);
+  }
+
+  // ── 업데이트 ────────────────────────────────────────────
+  function update(dt){
+    if (shake > 0) shake = Math.max(0, shake - dt * 28);
+    for (let i = parts.length - 1; i >= 0; i--){
+      const p = parts[i];
+      p.t += dt; p.vy += 520 * dt; p.x += p.vx * dt; p.y += p.vy * dt;
+      if (p.t >= p.life) parts.splice(i, 1);
+    }
+
+    if (state === "clear"){
+      if ((timer += dt) > 1.8){ level++; buildLevel(level); resetBall(); }
+      return;
+    }
+    if (state === "over"){
+      if (settings.auto && (timer += dt) > 2.5) newGame();
+      return;
+    }
+    if (state !== "play" && state !== "ready") return;
+
+    // 아이템 효과 시간
+    if (sizeT > 0 && (sizeT -= dt) <= 0) sizeMul = 1;
+    if (pierceT > 0) pierceT -= dt;
+    paddle.w += (baseW() * sizeMul - paddle.w) * Math.min(1, dt * 10);
+
+    // 패들
+    const half = paddle.w / 2;
+    if (settings.auto) autoControl(dt);
+    else {
+      if (keyL) paddle.target -= 460 * dt;
+      if (keyR) paddle.target += 460 * dt;
+      paddle.target = clamp(paddle.target, half, W - half);
+      paddle.x += (paddle.target - paddle.x) * Math.min(1, dt * 24);
+    }
+    paddle.x = clamp(paddle.x, half, W - half);
+
+    if (state === "ready"){
+      balls[0].x = paddle.x; balls[0].y = PADDLE_Y - BALL_R - 2;
+      if (settings.auto && (timer += dt) > 0.6) launch();
+      return;
+    }
+
+    // 12초 동안 못 깨면 도움으로 +3 아이템을 떨어뜨린다
+    if ((idleT += dt) > 12){
+      idleT = 0;
+      drops.push({ x: 30 + Math.random() * (W - 60), y: TOP + ROWS * CELL + ITEM_R, kind: "plus3" });
+    }
+
+    // 떨어지는 아이템
+    for (let i = drops.length - 1; i >= 0; i--){
+      const d = drops[i];
+      d.y += ITEM_SPEED * dt;
+      if (d.y + ITEM_R >= PADDLE_Y && d.y - ITEM_R <= PADDLE_Y + PADDLE_H && Math.abs(d.x - paddle.x) < half + ITEM_R){
+        applyItem(d.kind); drops.splice(i, 1);
+      } else if (d.y > H + ITEM_R) drops.splice(i, 1);
+    }
+
+    // 공 (빠른 공이 칸을 건너뛰지 않게 3px씩 나눠 움직인다)
+    for (let i = balls.length - 1; i >= 0; i--){
+      const b = balls[i];
+      b.idle = (b.idle || 0) + dt;
+      const steps = Math.max(1, Math.ceil(Math.hypot(b.vx, b.vy) * dt / 3));
+      for (let s = 0; s < steps; s++) stepBall(b, dt / steps);
+      if (b.y > H + BALL_R * 2) balls.splice(i, 1);
+    }
+    if (broken >= totalGreen * CLEAR_AT){ levelClear(); return; }
+    if (balls.length === 0) loseLife();
+  }
+
+  // ── 그리기 ──────────────────────────────────────────────
+  function roundRect(x, y, w, h, r){
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath(); ctx.fill();
+  }
+  function banner(title, sub){
+    const y = TOP + ROWS * CELL + (PADDLE_Y - TOP - ROWS * CELL) / 2;
+    ctx.fillStyle = "rgba(12,12,12,.78)";
+    ctx.fillRect(0, y - 42, W, 84);
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#f2f2f2";
+    ctx.font = '20px Silkscreen, ui-monospace, monospace';
+    ctx.fillText(title, W / 2, y - 2);
+    ctx.fillStyle = COL.dim;
+    ctx.font = '13px -apple-system, system-ui, sans-serif';
+    ctx.fillText(sub, W / 2, y + 24);
+    ctx.textAlign = "left";
+  }
+  function drawItem(d){
+    ctx.fillStyle = ITEMS[d.kind].color;
+    ctx.beginPath(); ctx.arc(d.x, d.y, ITEM_R, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#ffffff";
+    if (d.kind === "plus3" || d.kind === "wide"){
+      ctx.textAlign = "center";
+      ctx.font = '700 10px -apple-system, system-ui, sans-serif';
+      ctx.fillText(d.kind === "plus3" ? "+3" : "«»", d.x, d.y + 3.5);
+      ctx.textAlign = "left";
+    }
+    else if (d.kind === "shrink") ctx.fillRect(d.x - 5, d.y - 1.5, 10, 3);
+    else { ctx.fillStyle = "#7a3d78"; ctx.fillRect(d.x - 1.5, d.y - 5.5, 3, 11); }
+  }
+
+  function draw(){
+    ctx.setTransform(k, 0, 0, k, 0, 0);
+    if (shake > 0) ctx.translate((Math.random() - .5) * shake, (Math.random() - .5) * shake);
+    ctx.fillStyle = COL.bg;
+    ctx.fillRect(-20, -20, W + 40, H + 40);
+    ctx.drawImage(field, 0, TOP, W, ROWS * CELL);
+
+    for (const d of drops) drawItem(d);
+
+    ctx.fillStyle = COL.green;
+    for (const p of parts){
+      ctx.globalAlpha = Math.max(0, 1 - p.t / p.life);
+      ctx.fillRect(p.x - 1, p.y - 1, 2, 2);
+    }
+    ctx.globalAlpha = 1;
+
+    // 공은 한 번에 채운다
+    ctx.fillStyle = pierceT > 0 ? COL.pierce : COL.ball;
+    ctx.beginPath();
+    for (const b of balls){ ctx.moveTo(b.x + BALL_R, b.y); ctx.arc(b.x, b.y, BALL_R, 0, Math.PI * 2); }
+    ctx.fill();
+
+    // 패들
+    ctx.fillStyle = COL.paddle;
+    ctx.fillRect(paddle.x - paddle.w / 2, PADDLE_Y, paddle.w, PADDLE_H);
+
+    // 진행 바
+    const by = H - safeBot - 14, bw = W - 28;
+    const prog = clamp(broken / (totalGreen * CLEAR_AT), 0, 1);
+    ctx.fillStyle = COL.track; roundRect(14, by, bw, 4, 2);
+    if (prog > 0){ ctx.fillStyle = COL.bar; roundRect(14, by, Math.max(4, bw * prog), 4, 2); }
+
+    if (state === "ready" && !settings.auto) banner("LEVEL " + level, "화면을 눌러 발사 · 끌어서 이동");
+    else if (state === "clear") banner("LEVEL " + level + " CLEAR", "+" + (1000 + level * 200).toLocaleString() + " 보너스");
+    else if (state === "over" && settings.auto) banner("GAME OVER", "잠시 후 다시 시작해요");
+  }
+
+  // ── HUD ─────────────────────────────────────────────────
+  let hudKey = "";
+  function syncHud(){
+    const key = [score, level, balls.length, lives, D.lives, settings.auto].join("|");
+    if (key === hudKey) return;
+    hudKey = key;
+    $("score").textContent = score.toLocaleString();
+    $("level").textContent = level;
+    $("ballCount").textContent = balls.length;
+    $("autoBadge").classList.toggle("on", settings.auto);
+    const el = $("lives");
+    el.innerHTML = "";
+    for (let i = 0; i < D.lives; i++){
+      const d = document.createElement("i");
+      if (i >= lives) d.className = "out";
+      el.appendChild(d);
+    }
+  }
+
+  // ── 메뉴 패널 ───────────────────────────────────────────
+  let panelMode = "menu";
+  function renderPanel(){
+    for (const b of $("diffSeg").children) b.setAttribute("aria-pressed", String(b.dataset.d === settings.diff));
+    $("autoSw").setAttribute("aria-checked", String(settings.auto));
+    $("soundSw").setAttribute("aria-checked", String(settings.sound));
+    $("diffNote").textContent = panelMode === "pause" && settings.diff !== game.diff ? "새 게임부터 적용" : "";
+    $("bestLine").textContent = "최고 기록 (" + DIFF[settings.diff].name + ") " + bestOf(settings.diff).toLocaleString();
+  }
+  function showPanel(mode, isBest){
+    panelMode = mode;
+    const sub = $("panelSub"), primary = $("primaryBtn"), secondary = $("secondaryBtn");
+    if (mode === "menu"){ sub.textContent = "공으로 초록 벽돌밭을 갉아먹어요"; primary.textContent = "시작"; secondary.hidden = true; }
+    else if (mode === "pause"){ sub.textContent = "일시정지"; primary.textContent = "계속"; secondary.hidden = false; }
+    else { sub.textContent = (isBest ? "최고 기록! " : "게임 오버 · ") + score.toLocaleString() + "점"; primary.textContent = "다시 하기"; secondary.hidden = true; }
+    renderPanel();
+    $("panel").classList.add("show");
+  }
+  function hidePanel(){ $("panel").classList.remove("show"); }
+
+  function pause(){
+    if (state !== "play" && state !== "ready" && state !== "clear") return;
+    resumeTo = state; state = "pause";
+    showPanel("pause");
+  }
+  function resume(){
+    if (state !== "pause") return;
+    state = resumeTo; pausedByHide = false;
+    hidePanel();
+  }
+
+  $("diffSeg").addEventListener("click", ev => {
+    const d = ev.target.closest("button")?.dataset.d;
+    if (!d) return;
+    settings.diff = d; saveSettings(); renderPanel();
+  });
+  $("autoSw").addEventListener("click", () => {
+    settings.auto = !settings.auto; saveSettings(); renderPanel();
+    if (settings.auto && state !== "menu") assisted = true;
+  });
+  $("soundSw").addEventListener("click", () => {
+    settings.sound = !settings.sound; saveSettings(); renderPanel();
+    if (settings.sound) audio();
+  });
+  $("primaryBtn").addEventListener("click", () => {
+    audio();
+    if (panelMode === "pause") resume(); else newGame();
+  });
+  $("secondaryBtn").addEventListener("click", () => { audio(); newGame(); });
+  $("pauseBtn").addEventListener("click", () => { audio(); pause(); });
+
+  // ── 입력: 화면 아무 곳이나 끌어서 패들을 움직인다 ───────
+  let drag = null;
+  const localX = ev => (ev.clientX - stage.getBoundingClientRect().left) / stage.clientWidth * W;
+  stage.addEventListener("pointerdown", ev => {
+    if (ev.target.closest("button, .panel")) return;
+    audio();
+    if (settings.auto) return;
+    drag = { id: ev.pointerId, sx: localX(ev), px: paddle.target };
+    stage.setPointerCapture?.(ev.pointerId);
+    if (state === "ready") launch();
+  });
+  stage.addEventListener("pointermove", ev => {
+    if (!drag || ev.pointerId !== drag.id) return;
+    paddle.target = drag.px + (localX(ev) - drag.sx) * 1.15;
+  });
+  const endDrag = ev => { if (drag && ev.pointerId === drag.id) drag = null; };
+  stage.addEventListener("pointerup", endDrag);
+  stage.addEventListener("pointercancel", endDrag);
+  document.addEventListener("gesturestart", ev => ev.preventDefault());
+
+  addEventListener("keydown", ev => {
+    const key = ev.key.toLowerCase();
+    if (key === "arrowleft") keyL = true;
+    if (key === "arrowright") keyR = true;
+    if (ev.code === "Space"){ ev.preventDefault(); audio(); if (state === "ready" && !settings.auto) launch(); }
+    if (key === "p" || key === "escape") state === "pause" ? resume() : pause();
+  });
+  addEventListener("keyup", ev => {
+    const key = ev.key.toLowerCase();
+    if (key === "arrowleft") keyL = false;
+    if (key === "arrowright") keyR = false;
+  });
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden){
+      if (state === "play" || state === "ready"){ pause(); pausedByHide = true; }
+    } else if (pausedByHide && settings.auto) resume();
+  });
+
+  // ── 루프 ────────────────────────────────────────────────
+  let last = performance.now();
+  function frame(now){
+    const dt = Math.min((now - last) / 1000, 0.05);
+    last = now;
+    if (state !== "pause" && state !== "menu") update(dt);
+    draw();
+    syncHud();
+    requestAnimationFrame(frame);
+  }
+
+  addEventListener("resize", layout);
+  layout();
+  buildLevel(1);
+  balls = [];
+  showPanel("menu");
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
