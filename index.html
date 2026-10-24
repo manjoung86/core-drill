@@ -60,8 +60,14 @@
   .lives{display:flex;gap:3px;}
   .lives i{width:6px;height:11px;border-radius:1px;background:var(--paddle);display:block;}
   .lives i.out{background:#3a3a3a;}
-  .badge{display:none;font-size:10px;font-weight:600;letter-spacing:.12em;padding:3px 6px;border:1px solid #2f7d2f;color:#8fe08f;border-radius:4px;}
-  .badge.on{display:inline-block;}
+  /* 수동·자동 전환 버튼: 게임 중에 한 번 눌러 바로 바꾼다 */
+  .auto-btn{
+    pointer-events:auto;appearance:none;
+    height:32px;min-width:72px;padding:0 10px;border-radius:8px;
+    border:1px solid #444;background:rgba(255,255,255,.04);color:var(--dim);
+    font:inherit;font-size:11px;font-weight:700;letter-spacing:.12em;
+  }
+  .auto-btn.on{border-color:#2f7d2f;background:#1d4d1d;color:#8fe08f;}
   /* 벙커버스터 발사 버튼: 오른손 엄지로 패들을 끄는 동안 왼손 엄지로 쏘도록 왼쪽 아래 */
   .missile-btn{
     position:absolute;left:14px;bottom:calc(env(safe-area-inset-bottom) + 92px);
@@ -135,7 +141,7 @@
       <div class="meta">LV <span id="level">1</span> · 공 <span id="ballCount">1</span></div>
     </div>
     <div class="right">
-      <span class="badge" id="autoBadge">AUTO</span>
+      <button class="auto-btn" id="autoBtn" type="button" aria-label="수동·자동 전환">MANUAL</button>
       <span class="lives" id="lives"></span>
       <button class="icon-btn" id="pauseBtn" type="button" aria-label="일시정지">II</button>
     </div>
@@ -1305,7 +1311,9 @@
     $("score").textContent = score.toLocaleString();
     $("level").textContent = level;
     $("ballCount").textContent = balls.length;
-    $("autoBadge").classList.toggle("on", settings.auto);
+    $("autoBtn").classList.toggle("on", settings.auto);
+    $("autoBtn").textContent = settings.auto ? "AUTO" : "MANUAL";
+    $("autoBtn").setAttribute("aria-pressed", String(settings.auto));
     $("missileBtn").hidden = missiles === 0;
     $("missileCount").textContent = missiles;
     const el = $("lives");
@@ -1354,10 +1362,20 @@
     if (!d) return;
     settings.diff = d; saveSettings(); renderPanel();
   });
-  $("autoSw").addEventListener("click", () => {
-    settings.auto = !settings.auto; saveSettings(); renderPanel();
-    if (settings.auto && state !== "menu") assisted = true;
-  });
+  // 수동·자동 전환: 수동으로 넘어올 땐 패들이 튀지 않게 지금 자리에서 이어받는다
+  function setAuto(on, announce){
+    settings.auto = on; saveSettings(); renderPanel();
+    if (on && state !== "menu") assisted = true;
+    if (!on){ paddle.target = paddle.x; drag = null; }
+    if (announce){
+      pop(on ? "AUTO ON" : "MANUAL", W / 2, PADDLE_Y - 60, 20, on ? "#8fe08f" : "#ffffff", 0.9);
+      haptic(1); blip(on ? 880 : 520, 0.08, "triangle", 0.05);
+    }
+    // 자동으로 게임 오버를 기다리던 중 수동으로 바꾸면 다시 하기 화면을 띄운다
+    if (!on && state === "over") showPanel("over", false);
+  }
+  $("autoSw").addEventListener("click", () => setAuto(!settings.auto, false));
+  $("autoBtn").addEventListener("click", () => { audio(); setAuto(!settings.auto, true); });
   $("soundSw").addEventListener("click", () => {
     settings.sound = !settings.sound; saveSettings(); renderPanel();
     if (settings.sound) audio();
