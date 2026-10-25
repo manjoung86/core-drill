@@ -329,8 +329,14 @@
   const scoreMul = () => 1 + tier * 0.5;          // 점수 배율 ×1.0 ~ ×3.0
 
   // ── 맵 종류: 1~5레벨은 차례로, 그 뒤는 무작위(같은 맵 연속 없음) ──
-  const MAPS = ["corridors", "full", "slits", "pyramid", "maze", "rings"];
-  const MAP_NAME = { corridors: "TUNNELS", full: "FULL FIELD", slits: "SLITS", pyramid: "PYRAMID", maze: "MAZE", rings: "TARGET" };
+  const MAPS = ["corridors", "full", "slits", "vault", "pyramid", "maze", "rings"];
+  const MAP_NAME = { corridors: "TUNNELS", full: "FULL FIELD", slits: "SLITS", vault: "VAULT", pyramid: "PYRAMID", maze: "MAZE", rings: "TARGET" };
+  // 맵별 벽돌 색. edge가 있으면 벽에 닿은 벽돌 칸을 그 색으로 칠해 테두리처럼 보이게 한다
+  const PALETTES = {
+    green: { brick: "#4c9a1c", line: "#2f6512", spark: "#b8f27c" },
+    red:   { brick: "#d4202c", line: "#8a121a", spark: "#ff8a8a", edge: "#7cff1f", edgeLine: "#3f8f0c" }
+  };
+  let pal = PALETTES.green;
   function mapFor(lv){
     if (lv <= MAPS.length) return MAPS[lv - 1];
     let k = Math.floor(mulberry32(lv * 977 + 3)() * MAPS.length);
@@ -447,6 +453,41 @@
     };
   }
 
+  // 금고: 바닥은 막혀 있고 왼쪽의 길고 좁은 세로 통로 두 개로 들어간다.
+  // 가운데 가로 통로가 두 번째 세로 통로와 금고를 잇고, 금고 안에는 작은 블록이 두 줄로 놓여 있다
+  function genVault(rnd, FH){
+    const snap = v => Math.round(v / CELL) * CELL;
+    const T = Math.max(CELL, 6), cw = Math.max(CELL, 12), f = CELL;          // 벽 두께, 통로 폭, 바깥 테두리
+    const c1 = f, w1 = c1 + cw, c2 = w1 + T, w2 = c2 + cw, room = w2 + T;   // 세로 통로·벽의 x 경계
+    const midY = snap(FH * 0.5);                                              // 가로 통로 위치
+    const vx0 = snap(W * 0.45), vx1 = snap(W * 0.64), vy0 = snap(FH * 0.3), vy1 = snap(FH * 0.72);
+    const pcx = [vx0 + (vx1 - vx0) * 0.35, vx0 + (vx1 - vx0) * 0.65];
+    const gaps = [snap(room + 20 + rnd() * (W / 2 - room)), snap(W / 2 + rnd() * (W / 2 - 40))];   // 바닥 벽의 작은 틈 두 곳
+    const inX = (px, a, b) => px >= a && px < b;
+    return (px, py) => {
+      if (py >= FH - T){                                                       // 바닥 벽
+        if (inX(px, c1, w1) || inX(px, c2, w2)) return EMPTY;
+        return gaps.some(g => inX(px, g, g + cw)) ? GREEN : WALL;
+      }
+      if (py < f + T) return GREEN;                                            // 맨 위 띠: 세로 통로 꼭대기와 방을 잇는다
+      if (inX(px, c1, w1) || inX(px, c2, w2)) return EMPTY;                    // 세로 통로
+      if (inX(px, w1, c2)) return WALL;
+      if (inX(px, w2, room)) return py >= midY && py < midY + cw ? EMPTY : WALL;
+      if (py >= midY && py < midY + cw && px < vx0 + T) return EMPTY;           // 가로 통로 (금고 왼쪽 벽까지 뚫는다)
+      if (px < vx0 && ((py >= midY - T && py < midY) || (py >= midY + cw && py < midY + cw + T))) return WALL;
+      if (inX(px, vx0, vx1) && py >= vy0 && py < vy1){                          // 금고
+        const inner = px >= vx0 + T && px < vx1 - T && py >= vy0 + T && py < vy1 - T;
+        if (!inner){
+          const corner = (px < vx0 + T || px >= vx1 - T) && (py < vy0 + T || py >= vy1 - T);
+          return corner ? GREEN : WALL;                                         // 모서리는 깰 수 있다
+        }
+        const ry = ((py - vy0 - T) % 24) - 12;
+        return pcx.some(cx => Math.abs(px - cx) < 6) && Math.abs(ry) < 6 ? GREEN : EMPTY;
+      }
+      return GREEN;
+    };
+  }
+
   // 피라미드: 바닥이 넓은 계단식, 층 사이에는 점선 회색 띠
   function pyramidAt(px, py, FH){
     const S = 24, layers = Math.max(4, Math.floor(FH * 0.95 / S));
@@ -490,7 +531,9 @@
         const i = cand[Math.floor(rnd() * cand.length)];
         const x = (i % COLS + 0.5) * CELL, y = (((i / COLS) | 0) + 0.5) * CELL;
         if (gems.some(g => Math.hypot(g.x - x, g.ly - y) < 48)) continue;
-        const g = { x, ly: y, kind: GEM_KINDS[k % GEM_KINDS.length], taken: false };
+        let kind = GEM_KINDS[k % GEM_KINDS.length];
+        if (pal === PALETTES.red && kind === "laser") kind = "plus3";   // 빨간 벽돌에선 레이저 색이 안 보인다
+        const g = { x, ly: y, kind, taken: false };
         gems.push(g);
         gemOf.set(i, g);
         break;
@@ -506,6 +549,7 @@
     grid = new Uint8Array(N);
     const rnd = mulberry32(lv * 2654435761 + 7);
     mapKind = mapFor(lv);
+    pal = mapKind === "vault" ? PALETTES.red : PALETTES.green;
 
     if (mapKind === "corridors"){
       const cr = Math.ceil(FH / 12), g = genCorridors(30, cr, rnd, lv);
@@ -515,6 +559,7 @@
     } else {
       const at = mapKind === "maze" ? genMaze(rnd, FH)
         : mapKind === "slits" ? genSlits(rnd, FH)
+        : mapKind === "vault" ? genVault(rnd, FH)
         : mapKind === "pyramid" ? (px, py) => pyramidAt(px, py, FH)
         : mapKind === "rings" ? (px, py) => ringsAt(px, py, FH)
         : () => GREEN;
@@ -559,13 +604,19 @@
     const x = (i % COLS) * CELL, y = ((i / COLS) | 0) * CELL, v = grid[i];
     fctx.clearRect(x, y, CELL, CELL);
     if (v === EMPTY) return;
-    fctx.fillStyle = v === WALL ? COL.wallLine : COL.greenLine;
-    fctx.fillRect(x, y, CELL, CELL);
     const gem = v === GREEN && gemOf.get(i);          // 박힌 아이템 칸은 아이템 색으로만 칠한다
-    fctx.fillStyle = v === WALL ? COL.wall : gem && !gem.taken ? ITEMS[gem.kind].color : COL.green;
+    const edge = v === GREEN && pal.edge && touchesWall(i);
+    fctx.fillStyle = v === WALL ? COL.wallLine : edge ? pal.edgeLine : pal.line;
+    fctx.fillRect(x, y, CELL, CELL);
+    fctx.fillStyle = v === WALL ? COL.wall : gem && !gem.taken ? ITEMS[gem.kind].color : edge ? pal.edge : pal.brick;
     fctx.fillRect(x + 1, y + 1, CELL - 2, CELL - 2);
     fctx.fillStyle = "rgba(255,255,255,.10)";
     fctx.fillRect(x + 1, y + 1, CELL - 2, 1.5);
+  }
+  function touchesWall(i){
+    const x = i % COLS;
+    return (x > 0 && grid[i - 1] === WALL) || (x < COLS - 1 && grid[i + 1] === WALL)
+      || (i >= COLS && grid[i - COLS] === WALL) || (i + COLS < grid.length && grid[i + COLS] === WALL);
   }
   function paintField(){
     field.width = Math.round(W * k); field.height = Math.round(ROWS * CELL * k);
@@ -727,7 +778,7 @@
     const v = power || 120;
     for (let j = 0; j < n; j++){
       parts.push({ x, y, vx:(Math.random() - .5) * v, vy:(Math.random() - .5) * v - 30, t:0, life:.3 + Math.random() * .4,
-        c: colors ? colors[(Math.random() * colors.length) | 0] : (Math.random() < .3 ? "#b8f27c" : COL.green) });
+        c: colors ? colors[(Math.random() * colors.length) | 0] : (Math.random() < .3 ? pal.spark : pal.brick) });
     }
     if (flashes.length < 250) flashes.push({ x: x - CELL / 2, y: y - CELL / 2, t: 0 });
   }
